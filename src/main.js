@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { exec } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const { promisify } = require('util');
 const http = require('http');
 const WebSocket = require('ws');
@@ -16,6 +16,39 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = 3000;
+const projectRoot = path.join(__dirname, '..');
+const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
+
+const hasCommand = (command) => {
+  const lookup = process.platform === 'win32' ? `where ${command}` : `command -v ${command}`;
+  try {
+    execSync(lookup, { stdio: 'ignore' });
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
+
+const convertWindowsPathToWsl = (windowsPath) => {
+  if (process.platform !== 'win32') {
+    return windowsPath;
+  }
+
+  const escapeSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+
+  try {
+    const output = execSync(`wsl wslpath -a '${escapeSingleQuotes(windowsPath)}'`, {
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+      .toString()
+      .trim();
+
+    return output || null;
+  } catch (error) {
+    console.error('Failed to convert path to WSL format:', error.message);
+    return null;
+  }
+};
 
 // WebSocket connection handling
 wss.on('connection', (ws) => {
@@ -151,11 +184,69 @@ app.post('/api/build-iso', async (req, res) => {
   }
   
   try {
-    console.log(`Building ISO for ${baseOs} with ${model}`);
-    
-    // Execute the existing build script in WSL with real-time progress and timeout
-    const buildProcess = exec(`wsl -u root bash scripts/build.sh "${baseOs}" "${model}"`);
-    
+    let buildCommand;
+    let buildArgs;
+    let environmentDescription;
+    const spawnOptions = { cwd: projectRoot };
+
+    if (!fs.existsSync(buildScriptPath)) {
+      return res.status(500).json({
+        success: false,
+        error: 'Build script is missing. Please reinstall the application.'
+      });
+    }
+
+    if (process.platform === 'win32') {
+      if (!hasCommand('wsl')) {
+        return res.status(500).json({
+          success: false,
+          error: 'WSL is required on Windows but was not found. Please install WSL and try again.'
+        });
+      }
+
+      const wslProjectRoot = convertWindowsPathToWsl(projectRoot);
+
+      if (!wslProjectRoot) {
+        return res.status(500).json({
+          success: false,
+          error: 'Unable to locate project directory within WSL. Please ensure WSL is configured correctly.'
+        });
+      }
+
+      const wslScriptPath = path.posix.join(wslProjectRoot, 'scripts', 'build.sh');
+      buildCommand = 'wsl';
+      buildArgs = ['-u', 'root', '--', 'bash', wslScriptPath, baseOs, model];
+      environmentDescription = 'WSL';
+    } else {
+      buildCommand = 'bash';
+      buildArgs = [buildScriptPath, baseOs, model];
+      environmentDescription = 'local bash environment';
+    }
+
+    console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
+    console.log(`Executing command: ${buildCommand} ${buildArgs.join(' ')}`);
+
+    // Execute the existing build script with real-time progress and timeout
+    const buildProcess = spawn(buildCommand, buildArgs, spawnOptions);
+
+    let responseSent = false;
+    const sendErrorResponse = (message) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.status(500).json({
+          success: false,
+          error: message
+        });
+      }
+    };
+
+    const sendSuccessResponse = (payload) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.json(payload);
+      }
+    };
+
     // Set overall build timeout (30 minutes)
     const buildTimeout = setTimeout(() => {
       console.log('Build process timeout after 30 minutes');
@@ -167,10 +258,20 @@ app.post('/api/build-iso', async (req, res) => {
         });
       }
     }, 30 * 60 * 1000);
-    
+
+    buildProcess.on('error', (processError) => {
+      clearTimeout(buildTimeout);
+      console.error('Failed to start build process:', processError);
+      broadcastProgress({
+        type: 'error',
+        message: 'Failed to start build process. Please check your environment configuration.'
+      });
+      sendErrorResponse('Failed to start build process. Please check your environment configuration.');
+    });
+
     buildProcess.stdout.on('data', (data) => {
       const output = data.toString();
-      console.log('WSL output:', output);
+      console.log('Build output:', output);
       
       // Parse progress from output
       if (output.includes('Downloading')) {
@@ -219,16 +320,16 @@ app.post('/api/build-iso', async (req, res) => {
     });
     
     buildProcess.stderr.on('data', (data) => {
-      console.error('WSL error:', data.toString());
+      console.error('Build error output:', data.toString());
       broadcastProgress({
         type: 'error',
         message: data.toString().trim()
       });
     });
-    
+
     buildProcess.on('close', (code) => {
       clearTimeout(buildTimeout); // Clear the timeout
-      
+
       if (code === 0) {
         broadcastProgress({
           type: 'progress',
@@ -236,8 +337,8 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully!',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully'
         });
       } else if (code === 124) {
@@ -248,27 +349,30 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully! (Model test timed out but continuing)',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully (model test timed out)'
         });
+      } else if (code === null) {
+        broadcastProgress({
+          type: 'error',
+          message: 'Build process ended before a result was returned'
+        });
+        sendErrorResponse('Build process ended before a result was returned');
       } else {
         broadcastProgress({
           type: 'error',
           message: `Build failed with exit code ${code}`
         });
-        res.status(500).json({ 
-          success: false, 
-          error: `Build failed with exit code ${code}`
-        });
+        sendErrorResponse(`Build failed with exit code ${code}`);
       }
     });
-    
+
   } catch (error) {
     console.error('Build error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
