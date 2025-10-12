@@ -512,41 +512,63 @@
         async function refreshUSBDrives() {
             const drivesDiv = document.getElementById('usbDrives');
             const statusDiv = document.getElementById('usbStatus');
-            
+
             statusDiv.innerHTML = '<div class="status info">Scanning for USB drives...</div>';
-            
+
             try {
                 const response = await fetch('/api/usb-drives');
                 const drives = await response.json();
-                
+
                 if (drives.length === 0) {
                     drivesDiv.innerHTML = '<div class="status warning">No USB drives detected. Please insert a USB drive and try again.</div>';
                 } else {
-                    drivesDiv.innerHTML = drives.map(drive => `
-                        <div class="usb-drive" onclick="selectUSBDrive('${drive.deviceName}', '${drive.deviceName}')">
-                            <h4>${drive.volumeName || 'Removable Disk'}</h4>
-                            <p>Device: ${drive.deviceName}</p>
-                            <p>Size: ${drive.size || 'Unknown'}</p>
-                            <p>Free Space: ${drive.freeSpace || 'Unknown'}</p>
-                        </div>
-                    `).join('');
+                    drivesDiv.innerHTML = drives.map(drive => {
+                        const payload = encodeURIComponent(JSON.stringify({
+                            deviceName: drive.deviceName,
+                            volumeName: drive.volumeName || 'Removable Disk',
+                            size: drive.size || 'Unknown',
+                            freeSpace: drive.freeSpace || 'Unknown',
+                            diskNumber: typeof drive.diskNumber === 'number' ? drive.diskNumber : null
+                        }));
+
+                        return `
+                            <div class="usb-drive" data-drive="${payload}">
+                                <h4>${drive.volumeName || 'Removable Disk'}</h4>
+                                <p>Device: ${drive.deviceName}</p>
+                                <p>Disk #: ${typeof drive.diskNumber === 'number' ? drive.diskNumber : 'Unknown'}</p>
+                                <p>Size: ${drive.size || 'Unknown'}</p>
+                                <p>Free Space: ${drive.freeSpace || 'Unknown'}</p>
+                            </div>
+                        `;
+                    }).join('');
+
+                    document.querySelectorAll('.usb-drive').forEach(card => {
+                        card.addEventListener('click', () => {
+                            const payload = card.dataset.drive ? JSON.parse(decodeURIComponent(card.dataset.drive)) : null;
+                            if (payload) {
+                                selectUSBDrive(payload, card);
+                            }
+                        });
+                    });
                 }
-                
+
                 statusDiv.innerHTML = `<div class="status success">Found ${drives.length} USB drive(s)</div>`;
             } catch (error) {
                 statusDiv.innerHTML = `<div class="status error">Error scanning USB drives: ${error.message}</div>`;
             }
         }
 
-        function selectUSBDrive(deviceName, mountpoint) {
-            selectedUSBDrive = { deviceName, mountpoint };
-            
+        function selectUSBDrive(drive, element) {
+            selectedUSBDrive = drive;
+
             // Update UI
             document.querySelectorAll('.usb-drive').forEach(drive => {
                 drive.classList.remove('selected');
             });
-            event.target.closest('.usb-drive').classList.add('selected');
-            
+            if (element) {
+                element.classList.add('selected');
+            }
+
             // Enable write button
             document.getElementById('writeBtn').disabled = false;
             document.getElementById('step3').classList.add('completed');
@@ -574,9 +596,10 @@
                 const response = await fetch('/api/write-usb', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        isoPath, 
-                        usbDevice: selectedUSBDrive.deviceName 
+                    body: JSON.stringify({
+                        isoPath,
+                        usbDevice: selectedUSBDrive.deviceName,
+                        diskNumber: selectedUSBDrive.diskNumber
                     })
                 });
                 

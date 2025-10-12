@@ -1,256 +1,73 @@
 # BootAI Architecture Specification
 
-## System Architecture Overview
+## High-Level Architecture
 
-BootAI follows a monolithic architecture with clear separation of concerns between frontend, backend, and Linux integration components.
+BootAI ships as a Node.js application that serves a static front-end and orchestrates operating-system tooling through child processes. The repository now includes the WSL build script (`scripts/build.sh`) required by the backend, enabling the primary ISO workflow to succeed when run inside Windows + WSL.
 
-## Component Architecture
-
-### 1. Frontend Layer (Web Interface)
 ```
-public/index.html
-├── HTML Structure
-├── CSS Styling
-├── JavaScript Logic
-│   ├── WebSocket Connection
-│   ├── Progress Tracking
-│   ├── Form Validation
-│   ├── API Communication
-│   └── Error Handling
-└── User Experience
-    ├── Step-by-step Wizard
-    ├── Real-time Progress
-    ├── Download Management
-    └── USB Drive Selection
+Browser (public/index.html)
+        │  Fetch + WebSocket
+        ▼
+Express server (src/main.js)
+        │  exec(…) calls to Windows / WSL tooling
+        ▼
+External commands (PowerShell, diskpart, wsl, ollama, scripts/build.sh)
 ```
 
-### 2. Backend Layer (Node.js Server)
-```
-src/main.js
-├── Express Server Setup
-├── WebSocket Server
-├── API Endpoints
-│   ├── /api/usb-drives (GET)
-│   ├── /api/wsl-status (GET)
-│   ├── /api/build-iso (POST)
-│   ├── /api/write-usb (POST)
-│   ├── /api/download-iso (GET)
-│   ├── /api/cache-status (GET)
-│   └── /api/clear-cache (POST)
-├── Middleware
-│   ├── CORS
-│   ├── JSON Parsing
-│   ├── Error Handling
-│   └── Timeout Management
-└── Process Management
-    ├── WSL Integration
-    ├── USB Operations
-    ├── File Streaming
-    └── Progress Broadcasting
-```
+## Components
 
-### 3. Linux Integration Layer (WSL2)
-```
-scripts/build.sh
-├── System Validation
-├── ISO Download & Caching
-├── Ollama Installation
-├── Model Management
-├── Filesystem Operations
-│   ├── ISO Mounting
-│   ├── Filesystem Extraction
-│   ├── Service Configuration
-│   └── ISO Rebuilding
-└── Error Handling
-    ├── Network Retry Logic
-    ├── Permission Management
-    ├── Disk Space Validation
-    └── Process Timeout
-```
+### Front-End (public/index.html)
+- Single HTML file with inline CSS/JS.
+- Implements a multi-step wizard for configuring base OS + model, triggering builds, scanning USB drives, and writing the ISO.
+- Connects to `ws://localhost:3000` for progress updates and calls REST endpoints with `fetch`.
+- Progress bars respond to keywords produced by the backend subprocesses.
 
-## Data Flow Architecture
+### Backend (src/main.js)
+- Sets up an Express server and a `ws` WebSocket server on port 3000.
+- Endpoints:
+  - `GET /api/usb-drives` → executes a PowerShell command to enumerate removable drives. Returns an array; errors resolve to `[]`.
+  - `GET /api/wsl-status` → runs several `wsl` commands (status, list, tool availability) and returns a structured result.
+  - `POST /api/build-iso` → validates inputs then runs `wsl -u root bash scripts/build.sh …`. With the script now present, the flow downloads/caches the distro ISO, optionally pulls the requested Ollama model, and emits a BootAI-branded copy.
+  - `POST /api/write-usb` → derives disk numbers via PowerShell (`Get-Partition`/`Get-Disk`), writes a temporary diskpart script, launches diskpart, then streams a WSL `dd` command. Progress milestones (`formatting_usb`, `usb_formatted`, `writing_iso`, `usb_write_completed`) are forwarded to the WebSocket.
+  - `GET /api/download-iso` → streams the first matching ISO file if present, otherwise responds with `{ success: false, error: … }`.
+  - `GET /api/cache-status` / `POST /api/clear-cache` → inspect and clean `/root/bootai-cache` inside WSL; success depends on external environment state.
+- Broadcasts WebSocket messages derived from subprocess stdout/stderr.
 
-### 1. User Interaction Flow
-```
-User → Web Interface → JavaScript → WebSocket → Backend → WSL → Linux Operations
-```
+### Build Script (scripts/build.sh)
+- Bash script intended to run inside WSL.
+- Accepts `<base OS> <model>` arguments that mirror the UI selections.
+- Creates `/root/bootai-cache/{isos,models}` directories and a temporary working directory.
+- Downloads the requested distro ISO with resume support and caches it for future builds.
+- Attempts to pull the requested Ollama model when the `ollama` CLI is available; continues gracefully if not.
+- Emits progress-friendly log lines that the backend relays to the UI.
+- Copies the base ISO to `bootai-<base>-<model>.iso`, produces `ai-node.iso` for legacy tooling, and writes a SHA-256 checksum file.
 
-### 2. Build Process Flow
-```
-User Input → Validation → WSL Script → ISO Download → Ollama Install → Model Pull → Filesystem Extract → Service Config → ISO Rebuild → Progress Updates → Completion
-```
+### External Dependencies
+- Node.js 18+ runtime (server + packaging).
+- Windows PowerShell for USB enumeration and diskpart scripting.
+- Windows Subsystem for Linux for ISO building and model management.
+- Optional: Ollama CLI inside WSL so model downloads succeed.
+- `pkg` dev dependency for emitting a standalone `bootai.exe`.
 
-### 3. USB Writing Flow
-```
-User Selection → Drive Validation → Diskpart Script → Format Drive → DD Command → ISO Write → Verification → Completion
-```
+## Data & File Flow
 
-## Communication Patterns
+1. User interacts with the wizard in the browser.
+2. Browser issues REST calls to Express.
+3. Express validates input and spawns operating-system tools with `child_process.exec`.
+4. Subprocess output is forwarded to the UI via WebSocket events and JSON responses.
+5. Generated artifacts (ISO files, cache directories, checksum) land under the project root or `/root/bootai-cache/`.
 
-### 1. WebSocket Communication
-- **Purpose**: Real-time progress updates
-- **Protocol**: WebSocket over HTTP
-- **Message Types**: progress, error, completion
-- **Frequency**: Every 2-5 seconds during operations
+## Key Architectural Considerations
 
-### 2. REST API Communication
-- **Purpose**: User actions and data retrieval
-- **Protocol**: HTTP/HTTPS
-- **Methods**: GET, POST
-- **Content-Type**: application/json
+- **Cache-first builds**: `scripts/build.sh` prioritises using cached ISOs/models to avoid repeated downloads.
+- **Graceful degradation**: When Ollama or cache directories are missing the script warns but continues.
+- **Privilege-sensitive operations**: USB flashing and cache management commands require elevated privileges and precise device targeting; the code now derives disk numbers automatically but still lacks guard rails against selecting the wrong drive.
+- **Process supervision**: Long-running commands rely on manual timeouts defined in `src/main.js`. There is no retry or resume logic.
+- **Error propagation**: Many subprocess errors are only logged to the console, leaving the UI with generic failures.
 
-### 3. WSL Communication
-- **Purpose**: Linux operations execution
-- **Protocol**: Command-line execution
-- **Method**: exec() with timeout
-- **Output**: stdout/stderr streaming
+## Recommended Next Steps
 
-## Storage Architecture
-
-### 1. Local Storage
-```
-BootAI/
-├── Cache Directories
-│   ├── /root/bootai-cache/isos/ (WSL)
-│   └── /root/bootai-cache/models/ (WSL)
-├── Build Artifacts
-│   ├── iso_extract/ (temporary)
-│   ├── iso_new/ (temporary)
-│   └── iso_mount/ (temporary)
-├── Generated Files
-│   ├── base.iso (downloaded)
-│   ├── ai-node.iso (generated)
-│   └── write_usb.txt (temporary)
-└── Configuration
-    ├── package.json
-    ├── .gitignore
-    └── .cursor/ (Spec Kit)
-```
-
-### 2. Memory Management
-- **Node.js Process**: ~50MB base + operation overhead
-- **WSL Memory**: Configurable via .wslconfig
-- **Cache Management**: Automatic cleanup of temporary files
-- **ISO Storage**: Persistent until manually cleared
-
-## Security Architecture
-
-### 1. Input Validation
-- **Frontend**: Client-side validation for UX
-- **Backend**: Server-side validation for security
-- **WSL**: Parameter sanitization and validation
-
-### 2. Process Isolation
-- **WSL**: Linux operations isolated from Windows
-- **USB Operations**: Confirmation required for destructive actions
-- **File Operations**: Permission checks and validation
-
-### 3. Error Handling
-- **Graceful Degradation**: Application continues on non-critical errors
-- **User Feedback**: Clear error messages with suggested actions
-- **Logging**: Comprehensive error logging for debugging
-
-## Performance Architecture
-
-### 1. Caching Strategy
-- **ISO Caching**: Prevents re-downloading base ISOs
-- **Model Caching**: Prevents re-downloading AI models
-- **File Validation**: Ensures cache integrity
-- **Cleanup**: Automatic removal of old cache files
-
-### 2. Concurrency Management
-- **Single Build Process**: Prevents resource conflicts
-- **Timeout Handling**: Prevents hanging operations
-- **Progress Streaming**: Real-time updates without blocking
-
-### 3. Resource Optimization
-- **Memory Usage**: Efficient file streaming
-- **Disk Usage**: Temporary file cleanup
-- **Network Usage**: IPv4 preference and retry logic
-
-## Deployment Architecture
-
-### 1. Single Executable
-- **Tool**: pkg for Node.js packaging
-- **Target**: Windows x64
-- **Dependencies**: Bundled with executable
-- **Size**: ~40MB compressed
-
-### 2. Runtime Requirements
-- **Windows**: 10/11 with WSL2
-- **RAM**: 8GB+ (16GB+ recommended)
-- **Storage**: 10GB+ free space
-- **Network**: Internet for initial downloads
-
-### 3. Distribution
-- **GitHub Releases**: Primary distribution method
-- **Versioning**: Semantic versioning
-- **Updates**: Manual download and replacement
-
-## Monitoring and Observability
-
-### 1. Progress Tracking
-- **WebSocket**: Real-time progress updates
-- **Stages**: Download, install, extract, rebuild, write
-- **Percentage**: Completion percentage for each stage
-
-### 2. Error Monitoring
-- **Console Logging**: Detailed error information
-- **User Feedback**: User-friendly error messages
-- **Recovery**: Automatic retry mechanisms
-
-### 3. Performance Metrics
-- **Build Time**: Total time for ISO creation
-- **Download Speed**: Network performance monitoring
-- **Resource Usage**: Memory and CPU utilization
-
-## Scalability Considerations
-
-### 1. Horizontal Scaling
-- **Single Instance**: Designed for single-user operation
-- **Resource Limits**: WSL memory and disk constraints
-- **Concurrency**: Limited by system resources
-
-### 2. Vertical Scaling
-- **RAM Scaling**: Better performance with more RAM
-- **Storage Scaling**: More cache capacity with more disk
-- **CPU Scaling**: Faster builds with more CPU cores
-
-### 3. Future Enhancements
-- **Multi-user Support**: Web-based multi-tenant architecture
-- **Cloud Integration**: Remote build capabilities
-- **Distributed Caching**: Shared cache across instances
-
-## Current Project Status
-
-### Working Components ✅
-- **Application startup and web interface** - BootAI runs on port 3000
-- **WSL integration and build process** - ISO build completes successfully
-- **ISO creation** - ai-node.iso generated (1.5GB+ file)
-- **Caching system** - Prevents re-downloading ISOs and models
-- **WebSocket progress tracking** - Real-time updates during build
-- **API endpoint functionality** - All endpoints respond correctly
-- **Ollama integration** - Phi-3 mini model successfully pulled
-- **Ubuntu Server compatibility** - Fixed squashfs extraction issues
-
-### Current Issues ⚠️
-- **JSON parsing error** - Appears in terminal but non-blocking
-- **USB writing functionality** - Needs testing with actual hardware
-- **Different OS/model combinations** - Needs comprehensive testing
-- **WSL systemd warnings** - Expected behavior, not critical
-
-### Architecture Status
-- **Frontend Layer**: ✅ Fully functional web interface
-- **Backend Layer**: ✅ Express server with WebSocket working
-- **Linux Integration**: ✅ WSL2 + Bash scripts operational
-- **Storage Architecture**: ✅ Cache system implemented
-- **Security Architecture**: ✅ Input validation and error handling
-- **Performance Architecture**: ✅ Caching and timeout management
-
-### Recent Architectural Changes
-- **Minimal Filesystem Approach**: Replaced complex squashfs extraction
-- **Cache Implementation**: Added persistent cache directories
-- **Timeout Management**: Added comprehensive timeout handling
-- **Error Recovery**: Implemented graceful error handling
-- **Progress Streaming**: Real-time WebSocket updates
-- **Input Validation**: Server-side validation for all endpoints
+1. Enhance `scripts/build.sh` to customize the ISO contents (chroot, install dependencies, configure services) rather than duplicating the base image.
+2. Introduce stronger USB safeguards (confirm device type, prompt for confirmation, surface diskpart/`dd` output to the UI).
+3. Centralize subprocess execution with structured logging and error handling so UI feedback stays in sync with backend state.
+4. Consider splitting the architecture into explicit modules (USB, build pipeline, cache) to improve testability once automated tests are introduced.
