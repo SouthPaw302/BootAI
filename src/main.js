@@ -29,6 +29,48 @@ const hasCommand = (command) => {
   }
 };
 
+const resolveWslExecutable = () => {
+  if (process.platform !== 'win32') {
+    return null;
+  }
+
+  const systemRoot = process.env.SystemRoot || process.env.WINDIR;
+
+  const candidates = [];
+
+  if (systemRoot) {
+    const sysnativePath = path.win32.join(systemRoot, 'Sysnative', 'wsl.exe');
+    const system32Path = path.win32.join(systemRoot, 'System32', 'wsl.exe');
+
+    // Sysnative is required for 32-bit Node processes running on 64-bit Windows.
+    candidates.push(sysnativePath);
+    candidates.push(system32Path);
+  }
+
+  // Fall back to relying on PATH if direct paths fail.
+  candidates.push('wsl');
+
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    try {
+      if (candidate === 'wsl') {
+        if (hasCommand('wsl')) {
+          return 'wsl';
+        }
+      } else if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    } catch (error) {
+      console.warn(`Unable to validate WSL executable candidate "${candidate}":`, error.message);
+    }
+  }
+
+  return null;
+};
+
 const convertWindowsPathToWsl = (windowsPath) => {
   if (process.platform !== 'win32') {
     return windowsPath;
@@ -197,7 +239,9 @@ app.post('/api/build-iso', async (req, res) => {
     }
 
     if (process.platform === 'win32') {
-      if (!hasCommand('wsl')) {
+      const wslExecutable = resolveWslExecutable();
+
+      if (!wslExecutable) {
         return res.status(500).json({
           success: false,
           error: 'WSL is required on Windows but was not found. Please install WSL and try again.'
@@ -214,7 +258,7 @@ app.post('/api/build-iso', async (req, res) => {
       }
 
       const wslScriptPath = path.posix.join(wslProjectRoot, 'scripts', 'build.sh');
-      buildCommand = 'wsl';
+      buildCommand = wslExecutable;
       buildArgs = ['-u', 'root', '--', 'bash', wslScriptPath, baseOs, model];
       environmentDescription = 'WSL';
     } else {
@@ -224,7 +268,8 @@ app.post('/api/build-iso', async (req, res) => {
     }
 
     console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
-    console.log(`Executing command: ${buildCommand} ${buildArgs.join(' ')}`);
+    const formattedArgs = buildArgs.map((arg) => (arg.includes(' ') ? `'${arg}'` : arg)).join(' ');
+    console.log(`Executing command: ${buildCommand} ${formattedArgs}`);
 
     // Execute the existing build script with real-time progress and timeout
     const buildProcess = spawn(buildCommand, buildArgs, spawnOptions);
@@ -353,6 +398,13 @@ app.post('/api/build-iso', async (req, res) => {
           success: true,
           message: 'ISO build completed successfully (model test timed out)'
         });
+      } else if (typeof code === 'number' && code < 0) {
+        const errorMessage = `Build failed to launch (system error ${code}). Please verify that WSL is installed and accessible.`;
+        broadcastProgress({
+          type: 'error',
+          message: errorMessage
+        });
+        sendErrorResponse(errorMessage);
       } else if (code === null) {
         broadcastProgress({
           type: 'error',
