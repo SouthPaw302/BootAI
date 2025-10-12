@@ -1,436 +1,162 @@
 # BootAI API Specification
 
-## API Overview
+All endpoints are served from `http://localhost:3000`. There is no authentication layer and CORS is enabled for any origin.
 
-BootAI provides a RESTful API for managing ISO building, USB operations, and system status. All endpoints return JSON responses and support real-time progress updates via WebSocket.
+> **Important:** Several endpoints delegate to external tooling (PowerShell, diskpart, WSL, Ollama). The repository now ships a WSL build script (`scripts/build.sh`), but operations still require a properly provisioned Windows + WSL environment.
 
-## Base URL
-```
-http://localhost:3000
-```
+## WebSocket Channel
 
-## Authentication
-No authentication required for local development.
-
-## Response Format
-All responses follow this format:
-```json
-{
-  "success": boolean,
-  "data": object | null,
-  "error": string | null,
-  "message": string | null
-}
-```
-
-## WebSocket Endpoints
-
-### WebSocket Connection
-```
-ws://localhost:3000
-```
-
-### WebSocket Message Types
-
-#### Progress Update
-```json
-{
-  "type": "progress",
-  "stage": "build_progress" | "build_error" | "build_completed" | "usb_write_completed",
-  "message": "string",
-  "progress": number
-}
-```
-
-#### Error Message
-```json
-{
-  "type": "error",
-  "message": "string"
-}
-```
-
-## REST API Endpoints
-
-### 1. USB Drive Detection
-
-#### GET /api/usb-drives
-Get list of available USB drives.
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
+- URL: `ws://localhost:3000`
+- Message formats:
+  - Progress update
+    ```json
     {
-      "device": "E:",
-      "label": "USB Drive",
-      "size": "8GB",
-      "freeSpace": "7.5GB"
+      "type": "progress",
+      "stage": "downloading" | "installing" | "testing_model" | "model_tested" | "model_timeout" | "building_iso" | "formatting_usb" | "usb_formatted" | "writing_iso" | "completed" | "usb_write_completed",
+      "message": "Free-form text mirrored from subprocess output",
+      "progress": 0
+    }
+    ```
+  - Error
+    ```json
+    {
+      "type": "error",
+      "message": "Free-form error string"
+    }
+    ```
+- The backend emits messages when subprocess stdout contains specific keywords. `scripts/build.sh` prints the required markers ("Downloading", "Installing Ollama", "Testing model compatibility", "Model … working correctly", "Creating BootAI ISO") so the UI sees meaningful progress.
+
+## REST Endpoints
+
+### `GET /api/usb-drives`
+Enumerates removable drives via PowerShell.
+
+- **Response body (success):** an array of drive descriptors. Example
+  ```json
+  [
+    {
+      "deviceName": "E:",
+      "volumeName": "BOOTAI",
+      "size": "57 GB",
+      "freeSpace": "56 GB",
+      "diskNumber": 3
     }
   ]
-}
-```
+  ```
+- **Failure modes:** PowerShell errors or JSON parsing failures log to the console and the handler resolves to `[]` (no HTTP error code).
+- **Notes:** The drive list is a best-effort snapshot. No validation ensures the selected device is removable or safe to overwrite.
 
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "No USB drives found"
-}
-```
+### `GET /api/wsl-status`
+Runs a series of diagnostic `wsl` commands.
 
-### 2. WSL Status Check
-
-#### GET /api/wsl-status
-Check WSL installation and status.
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "installed": true,
-    "running": true,
-    "distributions": ["Ubuntu"],
-    "version": "2.0.0"
-  }
-}
-```
-
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "WSL not installed or not running"
-}
-```
-
-### 3. ISO Building
-
-#### POST /api/build-iso
-Start ISO building process.
-
-**Request Body:**
-```json
-{
-  "baseOs": "ubuntu-22.04" | "ubuntu-24.04" | "debian-12",
-  "model": "phi3:mini" | "phi3" | "llama3" | "llama2" | "mistral"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "ISO build process started"
-}
-```
-
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "Missing required parameters: baseOs and model"
-}
-```
-
-**Validation Errors:**
-```json
-{
-  "success": false,
-  "error": "Invalid base OS. Must be one of: ubuntu-22.04, ubuntu-24.04, debian-12"
-}
-```
-
-```json
-{
-  "success": false,
-  "error": "Invalid model. Must be one of: phi3:mini, phi3, llama3, llama2, mistral"
-}
-```
-
-### 4. USB Writing
-
-#### POST /api/write-usb
-Write ISO to USB drive.
-
-**Request Body:**
-```json
-{
-  "isoPath": "ai-node.iso",
-  "usbDevice": "E:"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "USB write process started"
-}
-```
-
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "Missing required parameters: isoPath and usbDevice"
-}
-```
-
-**Validation Errors:**
-```json
-{
-  "success": false,
-  "error": "Invalid ISO path. Must end with .iso"
-}
-```
-
-```json
-{
-  "success": false,
-  "error": "Invalid USB device format. Must be like \"E:\""
-}
-```
-
-### 5. ISO Download
-
-#### GET /api/download-iso
-Download generated ISO file.
-
-**Response:**
-- **Content-Type**: `application/octet-stream`
-- **Content-Disposition**: `attachment; filename="ai-node.iso"`
-- **Content-Length**: File size in bytes
-
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "No ISO file found. Please build an ISO first."
-}
-```
-
-**Timeout Response:**
-```json
-{
-  "success": false,
-  "error": "Download timeout - file too large or connection too slow"
-}
-```
-
-### 6. Cache Management
-
-#### GET /api/cache-status
-Get cache status and contents.
-
-**Response:**
-```json
-{
-  "success": true,
-  "data": {
-    "isos": [
+- **Response body:**
+  ```json
+  {
+    "available": false,
+    "checks": [
       {
-        "name": "ubuntu-22.04.5-live-server-amd64.iso",
-        "size": "2.1GB",
-        "path": "/root/bootai-cache/isos/ubuntu-22.04.5-live-server-amd64.iso"
+        "name": "WSL Status",
+        "success": false,
+        "output": "",
+        "error": "Timeout"
       }
     ],
-    "models": [
-      {
-        "name": "phi3:mini",
-        "size": "1.2GB",
-        "status": "available"
-      }
-    ]
+    "summary": "WSL validation error: …"
   }
-}
-```
+  ```
+  Each `check` entry corresponds to the command list in `validateWSL()`.
+- **Failure modes:** If any command errors or times out, `available` is `false` and errors are captured per check. The endpoint always returns HTTP 200.
 
-#### POST /api/clear-cache
-Clear cache files.
+### `POST /api/build-iso`
+Validates request parameters then spawns `wsl -u root bash scripts/build.sh <baseOs> <model>`.
 
-**Request Body:**
-```json
-{
-  "type": "isos" | "models" | "all"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Cache cleared successfully"
-}
-```
-
-**Error Response:**
-```json
-{
-  "success": false,
-  "error": "Invalid cache type. Must be one of: isos, models, all"
-}
-```
-
-## Error Handling
-
-### HTTP Status Codes
-- **200**: Success
-- **400**: Bad Request (validation errors)
-- **404**: Not Found (file not found)
-- **408**: Request Timeout (download timeout)
-- **500**: Internal Server Error
-
-### Error Response Format
-```json
-{
-  "success": false,
-  "error": "Error message describing what went wrong"
-}
-```
-
-### Common Error Scenarios
-
-#### 1. Validation Errors
-- Missing required parameters
-- Invalid parameter values
-- Malformed request body
-
-#### 2. System Errors
-- WSL not available
-- USB drive not found
-- Insufficient disk space
-- Network connectivity issues
-
-#### 3. Process Errors
-- Build process failure
-- USB write failure
-- File system errors
-- Permission denied
-
-## Rate Limiting
-No rate limiting implemented for local development.
-
-## CORS Policy
-```javascript
-{
-  "origin": "*",
-  "methods": ["GET", "POST"],
-  "allowedHeaders": ["Content-Type"]
-}
-```
-
-## Timeout Configuration
-
-### Request Timeouts
-- **Build Process**: 30 minutes
-- **USB Write**: 10 minutes
-- **File Download**: 10 minutes
-- **API Requests**: 5 minutes
-
-### WebSocket Timeouts
-- **Connection**: No timeout
-- **Message**: No timeout
-- **Reconnection**: Automatic
-
-## Examples
-
-### Complete Build Workflow
-
-#### 1. Check WSL Status
-```bash
-curl http://localhost:3000/api/wsl-status
-```
-
-#### 2. Start ISO Build
-```bash
-curl -X POST http://localhost:3000/api/build-iso \
-  -H "Content-Type: application/json" \
-  -d '{"baseOs":"ubuntu-22.04","model":"phi3:mini"}'
-```
-
-#### 3. Monitor Progress (WebSocket)
-```javascript
-const ws = new WebSocket('ws://localhost:3000');
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  if (data.type === 'progress') {
-    console.log(`${data.stage}: ${data.message} (${data.progress}%)`);
+- **Expected request body:**
+  ```json
+  {
+    "baseOs": "ubuntu-22.04" | "ubuntu-24.04" | "debian-12",
+    "model": "phi3:mini" | "phi3" | "llama3" | "llama2" | "mistral"
   }
-};
-```
-
-#### 4. Download ISO
-```bash
-curl http://localhost:3000/api/download-iso -o ai-node.iso
-```
-
-#### 5. Write to USB
-```bash
-curl -X POST http://localhost:3000/api/write-usb \
-  -H "Content-Type: application/json" \
-  -d '{"isoPath":"ai-node.iso","usbDevice":"E:"}'
-```
-
-### Error Handling Example
-```javascript
-fetch('/api/build-iso', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ baseOs: 'ubuntu-22.04', model: 'phi3:mini' })
-})
-.then(response => response.json())
-.then(data => {
-  if (data.success) {
-    console.log('Build started:', data.message);
-  } else {
-    console.error('Build failed:', data.error);
+  ```
+- **Success response:**
+  ```json
+  {
+    "success": true,
+    "message": "ISO build completed successfully"
   }
-})
-.catch(error => {
-  console.error('Network error:', error);
-});
-```
+  ```
+  (The variant message mentions model test timeout when `code === 124`, but the current script exits with `0` on success.)
+- **Validation errors:** Missing parameters or invalid values return HTTP 400 with `{ success: false, error: "…" }`.
+- **Current behaviour:** `scripts/build.sh` downloads/caches the requested distro ISO, optionally pulls the Ollama model, copies the ISO to `bootai-<baseOs>-<model>.iso`, and writes a matching checksum file. Output logs include the keywords consumed by the WebSocket bridge.
 
-## Current API Status
+### `POST /api/write-usb`
+Initiates USB flashing by creating a diskpart script and invoking diskpart + `dd`.
 
-### Working Endpoints ✅
-- **GET /api/usb-drives** - USB drive detection working
-- **GET /api/wsl-status** - WSL status check working
-- **POST /api/build-iso** - ISO build process working
-- **GET /api/download-iso** - ISO download working
-- **GET /api/cache-status** - Cache management working
-- **POST /api/clear-cache** - Cache clearing working
-- **WebSocket** - Real-time progress updates working
+- **Expected request body:**
+  ```json
+  {
+    "isoPath": "ai-node.iso",
+    "usbDevice": "E:",
+    "diskNumber": 3 // optional optimisation; backend re-derives if omitted
+  }
+  ```
+- **Success response:**
+  ```json
+  {
+    "success": true,
+    "message": "USB write process started for E:"
+  }
+  ```
+  The API responds before `diskpart`/`dd` finish; results are observable through console logs / WebSocket events.
+- **Validation errors:** HTTP 400 when the ISO path is not provided, does not end with `.iso`, or the drive name is not a single capital letter followed by a colon.
+- **Current behaviour:** The handler derives the disk number via `Get-Partition`/`Get-Disk`, writes a temporary diskpart script, and launches diskpart followed by a WSL `dd` command. Progress events mirror key milestones (`formatting_usb`, `usb_formatted`, `writing_iso`, `usb_write_completed`). Administrator privileges are still required and no guard rails prevent the user from targeting the wrong disk.
 
-### Current Issues ⚠️
-- **JSON parsing error** - Appears in terminal but non-blocking
-- **POST /api/write-usb** - Needs testing with actual hardware
-- **Input validation** - Working but JSON error persists
+### `GET /api/download-iso`
+Streams an ISO file if one exists in the working directory.
 
-### Recent API Changes
-- **Input validation** - Added comprehensive validation for all endpoints
-- **Timeout handling** - Added timeout management for all operations
-- **Error handling** - Improved error responses and user feedback
-- **Progress streaming** - Real-time WebSocket updates
-- **Cache management** - Added cache status and clearing endpoints
-- **File streaming** - Improved ISO download with timeout handling
+- **Success response:** Binary stream with `Content-Type: application/octet-stream` and `Content-Disposition` derived from the on-disk file name. The server searches for `ai-node.iso`, `base.iso`, or distro/model-specific variants.
+- **Failure response:** HTTP 404 with `{ success: false, error: "No ISO file found. Please build an ISO first." }`.
 
-### Performance Metrics
-- **API response time**: < 200ms for simple requests
-- **Build process**: ~15-20 minutes for standard ISO
-- **WebSocket latency**: < 100ms for progress updates
-- **Memory usage**: ~50MB base + operation overhead
+### `GET /api/cache-status`
+Queries cache folders inside WSL and the Ollama model list.
 
-## Future API Enhancements
+- **Success response:**
+  ```json
+  {
+    "success": true,
+    "cache": {
+      "isos": [ { "name": "…", "size": "…", "date": "…" } ],
+      "models": [ { "name": "…", "size": "…", "modified": "…" } ]
+    }
+  }
+  ```
+- **Failure modes:**
+  - If commands time out (>10s) the endpoint responds with `{ success: false, error: "Cache status check timeout" }`.
+  - If the directories do not exist the endpoint returns `{ success: false, cache: { isos: [], models: [] } }`.
 
-### Planned Features
-- **Authentication**: User authentication and authorization
-- **Rate Limiting**: API rate limiting and throttling
-- **API Versioning**: Versioned API endpoints
-- **Batch Operations**: Multiple ISO builds in parallel
-- **Cloud Integration**: Remote build capabilities
-- **Analytics**: Usage tracking and metrics
-- **Webhooks**: Event notifications for external systems
+### `POST /api/clear-cache`
+Clears cache directories via WSL.
+
+- **Expected request body:** `{ "type": "isos" | "models" | "all" }`. Any other value falls into the `else` branch and is treated as `all`.
+- **Success response:** `{ "success": true, "message": "…" }`, where the message is whatever the shell command prints.
+- **Failure response:** `{ "success": false, "error": "…" }` when the WSL command fails or times out (>30s).
+
+## Endpoint Status Summary
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /api/usb-drives` | ⚠️ Returns empty array on errors; parsing failures are silently swallowed. Adds disk numbers to drive metadata. |
+| `GET /api/wsl-status` | ⚠️ Works when WSL is installed; otherwise reports failures but still HTTP 200. |
+| `POST /api/build-iso` | ✅ Finishes successfully when `scripts/build.sh` can download the base ISO and disk space/network are available. |
+| `POST /api/write-usb` | ⚠️ Starts processes, derives disk numbers automatically, and streams additional progress, but still requires elevated privileges and manual validation. |
+| `GET /api/download-iso` | ✅ Succeeds after a build; otherwise returns 404. |
+| `GET /api/cache-status` | ⚠️ Depends on WSL directories and Ollama availability. |
+| `POST /api/clear-cache` | ⚠️ Requires WSL + Ollama; commands may fail silently. |
+| WebSocket | ✅ Receives meaningful progress markers from the build script. |
+
+## Suggested Improvements
+
+1. Extend `scripts/build.sh` to customize the ISO rather than copying the base image.
+2. Add structured error responses for `GET /api/usb-drives` (currently indistinguishable from "no drives found").
+3. Improve `/api/write-usb` safety: confirm drive removability, request confirmation in the UI, and surface diskpart/`dd` output directly to the user.
+4. Provide health endpoints and/or diagnostics that confirm the external environment before allowing long-running jobs to start.
+5. Document expected JSON shapes in the README once the missing features are implemented.

@@ -57,9 +57,6 @@ temp/
 # WSL cache (keep for development)
 # /root/ai-node-cache/
 
-# Generated scripts
-scripts/build.sh
-
 # USB drive contents (if any)
 *.iso
 

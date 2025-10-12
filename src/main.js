@@ -1,10 +1,16 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { exec } = require('child_process');
+const { promisify } = require('util');
 const http = require('http');
 const WebSocket = require('ws');
 const open = require('open');
+
+const execAsync = promisify(exec);
+const fsPromises = fs.promises;
 
 const app = express();
 const server = http.createServer(app);
@@ -41,10 +47,33 @@ const scanUSBDrives = async () => {
       console.error('USB scan timeout after 10 seconds');
       resolve([]);
     }, 10000);
-    
-    const process = exec('powershell -Command "Get-WmiObject -Class Win32_LogicalDisk | Where-Object {$_.DriveType -eq 2} | Select-Object DeviceID, VolumeName, Size, FreeSpace | ConvertTo-Json"', (error, stdout, stderr) => {
+
+    const script = [
+      'Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType = 2" | ForEach-Object {',
+      '  $driveLetter = $_.DeviceID.TrimEnd(\':\')',
+      '  $partition = $null',
+      '  try {',
+      '    $partition = Get-Partition -DriveLetter $driveLetter -ErrorAction Stop',
+      '  } catch { }',
+      '  $disk = $null',
+      '  if ($partition) {',
+      '    try {',
+      '      $disk = $partition | Get-Disk -ErrorAction Stop',
+      '    } catch { }',
+      '  }',
+      '  [PSCustomObject]@{',
+      '    DeviceID   = $_.DeviceID',
+      '    VolumeName = $_.VolumeName',
+      '    Size       = $_.Size',
+      '    FreeSpace  = $_.FreeSpace',
+      '    DiskNumber = if ($disk) { $disk.Number } else { $null }',
+      '  }',
+      '} | ConvertTo-Json'
+    ].join('; ');
+
+    const process = exec(`powershell -Command "${script}"`, (error, stdout, stderr) => {
       clearTimeout(timeout);
-      
+
       if (error) {
         console.error('Error scanning USB drives:', error);
         resolve([]);
@@ -65,7 +94,8 @@ const scanUSBDrives = async () => {
           deviceName: drive.DeviceID,
           volumeName: drive.VolumeName || 'Removable Disk',
           size: drive.Size ? Math.round(drive.Size / (1024 * 1024 * 1024)) + ' GB' : 'Unknown',
-          freeSpace: drive.FreeSpace ? Math.round(drive.FreeSpace / (1024 * 1024 * 1024)) + ' GB' : 'Unknown'
+          freeSpace: drive.FreeSpace ? Math.round(drive.FreeSpace / (1024 * 1024 * 1024)) + ' GB' : 'Unknown',
+          diskNumber: typeof drive.DiskNumber === 'number' ? drive.DiskNumber : null
         })));
       } catch (parseError) {
         console.error('Error parsing USB drives:', parseError);
@@ -244,8 +274,8 @@ app.post('/api/build-iso', async (req, res) => {
 });
 
 app.post('/api/write-usb', async (req, res) => {
-  const { isoPath, usbDevice } = req.body;
-  
+  const { isoPath, usbDevice, diskNumber: providedDiskNumber } = req.body;
+
   // Input validation
   if (!isoPath || !usbDevice) {
     return res.status(400).json({
@@ -253,7 +283,7 @@ app.post('/api/write-usb', async (req, res) => {
       error: 'Missing required parameters: isoPath and usbDevice'
     });
   }
-  
+
   if (!isoPath.endsWith('.iso')) {
     return res.status(400).json({
       success: false,
@@ -261,21 +291,76 @@ app.post('/api/write-usb', async (req, res) => {
     });
   }
   
-  if (!usbDevice.match(/^[A-Z]:$/)) {
+  if (!usbDevice.match(/^[A-Z]:$/i)) {
     return res.status(400).json({
       success: false,
       error: 'Invalid USB device format. Must be like "E:"'
     });
   }
-  
+
+  const driveLetter = usbDevice.replace(':', '').toUpperCase();
+
+  const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+
+  const ensureWslPath = async (originalPath) => {
+    if (!originalPath) {
+      throw new Error('ISO path is empty');
+    }
+
+    if (originalPath.startsWith('/')) {
+      return originalPath;
+    }
+
+    try {
+      const { stdout } = await execAsync(`wsl wslpath '${escapeForSingleQuotes(originalPath)}'`);
+      const converted = stdout.trim();
+      return converted || originalPath;
+    } catch (conversionError) {
+      console.warn('Failed to convert ISO path to WSL format:', conversionError.message);
+      return originalPath;
+    }
+  };
+
+  let tempDir;
+  const cleanupTempArtifacts = async () => {
+    if (!tempDir) {
+      return;
+    }
+
+    try {
+      await fsPromises.rm(tempDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+      console.warn('Failed to clean up temporary diskpart directory:', cleanupError.message);
+    }
+  };
+
+  let responseSent = false;
+
   try {
     console.log(`Writing ${isoPath} to ${usbDevice}`);
-    
-    // Extract disk number from device name (e.g., "E:" -> "1")
-    const diskNumber = usbDevice.replace(/[^0-9]/g, '');
-    
+
+    let diskNumber = providedDiskNumber;
+
+    if (diskNumber === undefined || diskNumber === null || diskNumber === '') {
+      const { stdout: diskStdout } = await execAsync(`powershell -Command "(Get-Partition -DriveLetter '${driveLetter}' | Get-Disk | Select-Object -ExpandProperty Number)"`);
+      diskNumber = diskStdout.trim();
+    }
+
+    const diskNumberString = diskNumber.toString().trim();
+
+    if (!diskNumberString || !diskNumberString.match(/^\d+$/)) {
+      return res.status(400).json({
+        success: false,
+        error: `Unable to resolve disk number for drive ${usbDevice}`
+      });
+    }
+
+    const numericDiskNumber = Number(diskNumberString);
+    tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bootai-diskpart-'));
+    const diskpartPath = path.join(tempDir, 'write_usb.txt');
+
     // Create diskpart script for proper USB formatting
-    const diskpartScript = `select disk ${diskNumber}
+    const diskpartScript = `select disk ${numericDiskNumber}
 clean
 convert mbr
 create partition primary
@@ -284,59 +369,125 @@ format fs=fat32 quick label="BootAI"
 assign
 exit`;
 
-    const fs = require('fs');
-    fs.writeFileSync('write_usb.txt', diskpartScript);
-    
+    await fsPromises.writeFile(diskpartPath, diskpartScript, 'utf8');
+
     // Execute the diskpart script to format USB drive
-    const formatCommand = `diskpart /s write_usb.txt`;
-    
+    const formatCommand = `diskpart /s "${diskpartPath}"`;
+
+    broadcastProgress({
+      type: 'progress',
+      stage: 'formatting_usb',
+      message: `Formatting disk ${numericDiskNumber} (${usbDevice})`,
+      progress: 70
+    });
+
     exec(formatCommand, (error, stdout, stderr) => {
-      if (error) {
-        console.error('USB format error:', error);
-        broadcastProgress({
-          type: 'error',
-          message: `USB formatting failed: ${error.message}`
-        });
-        return;
-      }
-      
-      console.log('USB format output:', stdout);
-      if (stderr) console.log('USB format stderr:', stderr);
-      
-      // After formatting, write the ISO to USB using dd in WSL
-      const isoWriteCommand = `wsl -u root dd if="${isoPath}" of="/dev/sd${String.fromCharCode(97 + parseInt(diskNumber))}" bs=1M status=progress`;
-      
-      exec(isoWriteCommand, (writeError, writeStdout, writeStderr) => {
-        if (writeError) {
-          console.error('ISO write error:', writeError);
+      (async () => {
+        await cleanupTempArtifacts();
+
+        if (error) {
+          console.error('USB format error:', error);
           broadcastProgress({
             type: 'error',
-            message: `ISO write failed: ${writeError.message}`
+            message: `USB formatting failed: ${error.message}`
           });
           return;
         }
-        
-        console.log('ISO write output:', writeStdout);
+
+        console.log('USB format output:', stdout);
+        if (stderr) console.log('USB format stderr:', stderr);
+
         broadcastProgress({
           type: 'progress',
-          stage: 'usb_write_completed',
-          message: '✅ ISO successfully written to USB drive!',
-          progress: 100
+          stage: 'usb_formatted',
+          message: `Disk ${numericDiskNumber} formatted successfully`,
+          progress: 80
+        });
+
+        let wslIsoPath;
+        try {
+          wslIsoPath = await ensureWslPath(isoPath);
+        } catch (pathError) {
+          console.error('ISO path conversion error:', pathError);
+          broadcastProgress({
+            type: 'error',
+            message: `ISO path conversion failed: ${pathError.message}`
+          });
+          return;
+        }
+
+        const targetDevice = `/dev/sd${String.fromCharCode(97 + numericDiskNumber)}`;
+        const isoWriteCommand = `wsl -u root bash -c "dd if='${escapeForSingleQuotes(wslIsoPath)}' of='${targetDevice}' bs=4M status=progress conv=fsync"`;
+
+        broadcastProgress({
+          type: 'progress',
+          stage: 'writing_iso',
+          message: `Writing ISO to ${targetDevice}`,
+          progress: 90
+        });
+
+        const writeProcess = exec(isoWriteCommand, { maxBuffer: 1024 * 1024 * 64 }, (writeError, writeStdout, writeStderr) => {
+          if (writeError) {
+            console.error('ISO write error:', writeError);
+            broadcastProgress({
+              type: 'error',
+              message: `ISO write failed: ${writeError.message}`
+            });
+            return;
+          }
+
+          console.log('ISO write output:', writeStdout);
+          if (writeStderr) {
+            console.log('ISO write stderr:', writeStderr);
+          }
+          broadcastProgress({
+            type: 'progress',
+            stage: 'usb_write_completed',
+            message: '✅ ISO successfully written to USB drive!',
+            progress: 100
+          });
+        });
+
+        writeProcess.stderr?.on('data', (chunk) => {
+          const output = chunk.toString().trim();
+          if (output) {
+            broadcastProgress({
+              type: 'progress',
+              stage: 'writing_iso',
+              message: output,
+              progress: 95
+            });
+          }
+        });
+      })().catch((pipelineError) => {
+        console.error('USB write pipeline error:', pipelineError);
+        broadcastProgress({
+          type: 'error',
+          message: `USB write pipeline error: ${pipelineError.message}`
         });
       });
     });
-    
-    res.json({ 
-      success: true, 
-      message: 'USB write process started' 
+
+    res.json({
+      success: true,
+      message: `USB write process started for ${usbDevice}`
     });
-    
+    responseSent = true;
+
   } catch (error) {
     console.error('USB write error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
-    });
+    await cleanupTempArtifacts();
+    if (!responseSent) {
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    } else {
+      broadcastProgress({
+        type: 'error',
+        message: `USB write failed: ${error.message}`
+      });
+    }
   }
 });
 
@@ -411,9 +562,6 @@ app.get('/api/wsl-status', async (req, res) => {
 // ISO Download endpoint
 app.get('/api/download-iso', async (req, res) => {
   try {
-    const fs = require('fs');
-    const path = require('path');
-    
     // Look for the generated ISO file
     const possiblePaths = [
       'ai-node.iso',
