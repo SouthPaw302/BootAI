@@ -1,0 +1,52 @@
+{
+  "name": "bootai",
+  "version": "1.0.0",
+  "description": "Windows application to build AI-powered Linux ISOs and write them to USB drives",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "node src/main.js",
+    "build": "pkg src/main.js --targets node18-win-x64 --output bootai.exe",
+    "lint": "echo 'Linting not configured yet'",
+    "test": "echo 'Tests not configured yet'"
+  },
+  "keywords": [
+    "ai",
+    "linux",
+    "iso",
+    "usb",
+    "ollama",
+    "windows",
+    "wsl",
+    "bootable",
+    "portable"
+  ],
+  "author": "BootAI Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SouthPaw302/bootai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SouthPaw302/bootai/issues"
+  },
+  "homepage": "https://github.com/SouthPaw302/bootai#readme",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "open": "^8.4.2",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "scripts/**/*"
+    ]
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

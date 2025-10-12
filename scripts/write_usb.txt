@@ -1,0 +1,8 @@
+select disk 
+clean
+convert mbr
+create partition primary
+active
+format fs=fat32 quick label="BootAI"
+assign
+exit

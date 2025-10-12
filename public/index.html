@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BootAI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            padding: 40px;
+            max-width: 900px;
+            width: 90%;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.8;
+        }
+
+        .step {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+
+        .step.active {
+            border-color: #4ecdc4;
+            background: rgba(78, 205, 196, 0.1);
+        }
+
+        .step.completed {
+            border-color: #4caf50;
+            background: rgba(76, 175, 80, 0.1);
+        }
+
+        .step h3 {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+        }
+
+        .step-number {
+            background: #667eea;
+            color: white;
+            width: 35px;
+            height: 35px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        .step.completed .step-number {
+            background: #4caf50;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+
+        .form-group select,
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            font-size: 16px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            transition: all 0.3s ease;
+        }
+
+        .form-group select:focus,
+        .form-group input:focus {
+            outline: none;
+            border-color: #4ecdc4;
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        .form-group select option {
+            background: #333;
+            color: white;
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-success {
+            background: linear-gradient(45deg, #4caf50, #45a049);
+        }
+
+        .btn-warning {
+            background: linear-gradient(45deg, #ff9800, #f57c00);
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            font-weight: 500;
+        }
+
+        .status.info {
+            background: rgba(33, 150, 243, 0.2);
+            border: 1px solid rgba(33, 150, 243, 0.5);
+        }
+
+        .status.success {
+            background: rgba(76, 175, 80, 0.2);
+            border: 1px solid rgba(76, 175, 80, 0.5);
+        }
+
+        .status.error {
+            background: rgba(244, 67, 54, 0.2);
+            border: 1px solid rgba(244, 67, 54, 0.5);
+        }
+
+        .status.warning {
+            background: rgba(255, 152, 0, 0.2);
+            border: 1px solid rgba(255, 152, 0, 0.5);
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .usb-drive {
+            padding: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            margin: 10px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .usb-drive:hover {
+            border-color: #4ecdc4;
+            background: rgba(78, 205, 196, 0.1);
+        }
+
+        .usb-drive.selected {
+            border-color: #4ecdc4;
+            background: rgba(78, 205, 196, 0.2);
+        }
+
+        .usb-drive h4 {
+            margin-bottom: 8px;
+            font-size: 1.2em;
+        }
+
+        .usb-drive p {
+            opacity: 0.8;
+            font-size: 0.9em;
+            margin: 2px 0;
+        }
+
+        .progress {
+            width: 100%;
+            height: 25px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .flex {
+            display: flex;
+            gap: 15px;
+        }
+
+        .flex-1 {
+            flex: 1;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .mb-4 {
+            margin-bottom: 20px;
+        }
+
+        .mt-4 {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 BootAI</h1>
+            <p>Create bootable AI-powered Linux ISOs and write them to USB drives</p>
+        </div>
+
+        <!-- Step 1: Configuration -->
+        <div class="step active" id="step1">
+            <h3><span class="step-number">1</span>Configuration</h3>
+            <div class="grid">
+                <div class="form-group">
+                    <label for="baseOs">Base Operating System:</label>
+                    <select id="baseOs">
+                        <option value="ubuntu-22.04">Ubuntu 22.04 LTS</option>
+                        <option value="ubuntu-24.04">Ubuntu 24.04 LTS</option>
+                        <option value="debian-12">Debian 12</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="model">AI Model:</label>
+                    <select id="model">
+                        <option value="phi3:mini">Phi-3 Mini (1GB - CPU friendly)</option>
+                        <option value="phi3">Phi-3 (2GB)</option>
+                        <option value="llama3">Llama 3 (4GB)</option>
+                        <option value="llama2">Llama 2 (3GB)</option>
+                        <option value="mistral">Mistral (4GB)</option>
+                    </select>
+                </div>
+            </div>
+            <button class="btn" onclick="checkWSL()">Check WSL Status</button>
+            <div id="wslStatus"></div>
+        </div>
+
+        <!-- Step 2: Build ISO -->
+        <div class="step" id="step2">
+            <h3><span class="step-number">2</span>Build ISO</h3>
+            <p>This will download the base OS, install Ollama, and create a bootable AI Node ISO.</p>
+            <button class="btn" id="buildBtn" onclick="buildISO()">Start Building ISO</button>
+            <div class="progress hidden" id="buildProgress">
+                <div class="progress-bar" id="buildProgressBar">0%</div>
+            </div>
+            <div id="buildStatus"></div>
+            
+            <!-- Download ISO Option (shown after successful build) -->
+            <div class="hidden" id="downloadOption">
+                <div class="status success mt-4">
+                    <strong>📥 Download ISO File</strong><br>
+                    Your AI-powered ISO is ready! You can download it directly or proceed to USB writing.
+                </div>
+                <div class="flex mt-3">
+                    <button class="btn btn-warning flex-1" onclick="downloadISO()">Download ISO</button>
+                    <button class="btn flex-1" onclick="chooseDownloadLocation()">Choose Download Location</button>
+                </div>
+                <div id="downloadStatus"></div>
+            </div>
+        </div>
+
+        <!-- Step 3: Select USB Drive -->
+        <div class="step" id="step3">
+            <h3><span class="step-number">3</span>Select USB Drive</h3>
+            <p>Choose the USB drive where you want to write the ISO.</p>
+            <button class="btn btn-warning" onclick="refreshUSBDrives()">Refresh USB Drives</button>
+            <div id="usbDrives"></div>
+            <div id="usbStatus"></div>
+        </div>
+
+        <!-- Step 4: Write to USB -->
+        <div class="step" id="step4">
+            <h3><span class="step-number">4</span>Write to USB</h3>
+            <p><strong>⚠️ Warning:</strong> This will erase all data on the selected USB drive!</p>
+            <button class="btn btn-success" id="writeBtn" onclick="writeToUSB()" disabled>Write ISO to USB</button>
+            <div class="progress hidden" id="writeProgress">
+                <div class="progress-bar" id="writeProgressBar">0%</div>
+            </div>
+            <div id="writeStatus"></div>
+        </div>
+
+        <!-- Step 5: Download ISO (Alternative) -->
+        <div class="step hidden" id="step5">
+            <h3><span class="step-number">5</span>Download ISO</h3>
+            <p>If USB writing failed or you prefer to write the ISO manually, you can download it here:</p>
+            <div class="flex">
+                <button class="btn btn-warning flex-1" onclick="downloadISO()">Download ISO</button>
+                <button class="btn flex-1" onclick="chooseDownloadLocation()">Choose Filename</button>
+            </div>
+            <div id="downloadStatus"></div>
+            <div class="status info mt-4">
+                <strong>Manual USB Writing Instructions:</strong><br>
+                1. Download the ISO file using the buttons above<br>
+                2. Use tools like Rufus, Balena Etcher, or dd to write the ISO to your USB drive<br>
+                3. Boot from the USB drive on your target computer
+            </div>
+        </div>
+
+        <!-- Cache Management -->
+        <div class="step" id="cacheStep">
+            <h3><span class="step-number">💾</span>Cache Management</h3>
+            <p>Manage cached ISOs and AI models to save bandwidth and prevent corruption.</p>
+            <button class="btn btn-warning" onclick="checkCacheStatus()">Check Cache Status</button>
+            <div id="cacheStatus"></div>
+            <div class="flex mt-3">
+                <button class="btn flex-1" onclick="clearCache('isos')">Clear ISO Cache</button>
+                <button class="btn flex-1" onclick="clearCache('models')">Clear Model Cache</button>
+                <button class="btn flex-1" onclick="clearCache('all')">Clear All Cache</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let selectedUSBDrive = null;
+        let isoPath = null;
+        let ws = null;
+
+        // WebSocket connection for real-time updates
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:3000');
+            
+            ws.onopen = function() {
+                console.log('🔌 Connected to WebSocket');
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'progress') {
+                        updateProgress(data);
+                    } else if (data.type === 'error') {
+                        showError(data.message);
+                    }
+                } catch (error) {
+                    console.error('WebSocket message parsing error:', error);
+                    showError('Invalid message received from server');
+                }
+            };
+            
+            ws.onclose = function() {
+                console.log('🔌 WebSocket disconnected');
+                // Reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        function updateProgress(data) {
+            const progressDiv = document.getElementById('buildProgress');
+            const progressBar = document.getElementById('buildProgressBar');
+            const statusDiv = document.getElementById('buildStatus');
+            
+            progressDiv.classList.remove('hidden');
+            progressBar.style.width = data.progress + '%';
+            progressBar.textContent = data.progress + '%';
+            
+            statusDiv.innerHTML = `<div class="status info">${data.message}</div>`;
+            
+            if (data.stage === 'completed') {
+                statusDiv.innerHTML = `<div class="status success">${data.message}</div>`;
+                document.getElementById('step2').classList.add('completed');
+                document.getElementById('step3').classList.add('active');
+                document.getElementById('downloadOption').classList.remove('hidden');
+                isoPath = 'ai-node.iso';
+            }
+        }
+
+        function showError(message) {
+            const statusDiv = document.getElementById('buildStatus');
+            statusDiv.innerHTML = `<div class="status error">❌ ${message}</div>`;
+        }
+
+        async function checkWSL() {
+            const statusDiv = document.getElementById('wslStatus');
+            statusDiv.innerHTML = '<div class="status info">Checking WSL status...</div>';
+            
+            try {
+                const response = await fetch('/api/wsl-status');
+                const result = await response.json();
+                
+                if (result.available) {
+                    statusDiv.innerHTML = '<div class="status success">✅ WSL is available and ready!</div>';
+                    document.getElementById('step2').classList.add('active');
+                } else {
+                    statusDiv.innerHTML = `<div class="status error">❌ WSL is not available: ${result.error}</div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Error checking WSL: ${error.message}</div>`;
+            }
+        }
+
+        async function buildISO() {
+            const buildBtn = document.getElementById('buildBtn');
+            const progressDiv = document.getElementById('buildProgress');
+            const statusDiv = document.getElementById('buildStatus');
+            
+            const baseOs = document.getElementById('baseOs').value;
+            const model = document.getElementById('model').value;
+            
+            // Input validation
+            if (!baseOs || !model) {
+                showError('Please select both base OS and AI model');
+                return;
+            }
+            
+            buildBtn.disabled = true;
+            buildBtn.textContent = 'Building...';
+            progressDiv.classList.remove('hidden');
+            
+            statusDiv.innerHTML = '<div class="status info">Starting AI Node build process...</div>';
+            
+            try {
+                const response = await fetch('/api/build-iso', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ baseOs, model })
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (!result.success) {
+                    throw new Error(result.error);
+                }
+                
+                // Progress updates will come via WebSocket
+                
+            } catch (error) {
+                console.error('Build error:', error);
+                statusDiv.innerHTML = `<div class="status error">❌ Build failed: ${error.message}</div>`;
+                buildBtn.disabled = false;
+                buildBtn.textContent = 'Start Building ISO';
+            }
+        }
+
+        async function refreshUSBDrives() {
+            const drivesDiv = document.getElementById('usbDrives');
+            const statusDiv = document.getElementById('usbStatus');
+            
+            statusDiv.innerHTML = '<div class="status info">Scanning for USB drives...</div>';
+            
+            try {
+                const response = await fetch('/api/usb-drives');
+                const drives = await response.json();
+                
+                if (drives.length === 0) {
+                    drivesDiv.innerHTML = '<div class="status warning">No USB drives detected. Please insert a USB drive and try again.</div>';
+                } else {
+                    drivesDiv.innerHTML = drives.map(drive => `
+                        <div class="usb-drive" onclick="selectUSBDrive('${drive.deviceName}', '${drive.deviceName}')">
+                            <h4>${drive.volumeName || 'Removable Disk'}</h4>
+                            <p>Device: ${drive.deviceName}</p>
+                            <p>Size: ${drive.size || 'Unknown'}</p>
+                            <p>Free Space: ${drive.freeSpace || 'Unknown'}</p>
+                        </div>
+                    `).join('');
+                }
+                
+                statusDiv.innerHTML = `<div class="status success">Found ${drives.length} USB drive(s)</div>`;
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">Error scanning USB drives: ${error.message}</div>`;
+            }
+        }
+
+        function selectUSBDrive(deviceName, mountpoint) {
+            selectedUSBDrive = { deviceName, mountpoint };
+            
+            // Update UI
+            document.querySelectorAll('.usb-drive').forEach(drive => {
+                drive.classList.remove('selected');
+            });
+            event.target.closest('.usb-drive').classList.add('selected');
+            
+            // Enable write button
+            document.getElementById('writeBtn').disabled = false;
+            document.getElementById('step3').classList.add('completed');
+            document.getElementById('step4').classList.add('active');
+        }
+
+        async function writeToUSB() {
+            if (!selectedUSBDrive || !isoPath) {
+                alert('Please select a USB drive and ensure ISO is built');
+                return;
+            }
+            
+            const writeBtn = document.getElementById('writeBtn');
+            const progressDiv = document.getElementById('writeProgress');
+            const progressBar = document.getElementById('writeProgressBar');
+            const statusDiv = document.getElementById('writeStatus');
+            
+            writeBtn.disabled = true;
+            writeBtn.textContent = 'Writing...';
+            progressDiv.classList.remove('hidden');
+            
+            statusDiv.innerHTML = '<div class="status info">Writing ISO to USB drive... This may take several minutes.</div>';
+            
+            try {
+                const response = await fetch('/api/write-usb', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        isoPath, 
+                        usbDevice: selectedUSBDrive.deviceName 
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Simulate progress
+                    let progress = 0;
+                    const interval = setInterval(() => {
+                        progress += Math.random() * 3;
+                        if (progress > 95) progress = 95;
+                        progressBar.style.width = progress + '%';
+                        progressBar.textContent = Math.round(progress) + '%';
+                    }, 2000);
+                    
+                    // Complete after 60 seconds
+                    setTimeout(() => {
+                        clearInterval(interval);
+                        progressBar.style.width = '100%';
+                        progressBar.textContent = '100%';
+                        
+                        statusDiv.innerHTML = '<div class="status success">✅ ISO successfully written to USB drive!</div>';
+                        writeBtn.textContent = 'Write Complete';
+                        document.getElementById('step4').classList.add('completed');
+                    }, 60000);
+                    
+                } else {
+                    throw new Error(result.error);
+                }
+                
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Write failed: ${error.message}</div>`;
+                writeBtn.disabled = false;
+                writeBtn.textContent = 'Write ISO to USB';
+                
+                // Show download option on failure
+                document.getElementById('step5').classList.remove('hidden');
+                document.getElementById('step5').classList.add('active');
+            }
+        }
+
+        async function downloadISO(customFilename = null) {
+            const statusDiv = document.getElementById('downloadStatus');
+            
+            statusDiv.innerHTML = '<div class="status info">Preparing ISO download...</div>';
+            
+            try {
+                const response = await fetch('/api/download-iso');
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Download failed');
+                }
+                
+                // Get filename from Content-Disposition header
+                const contentDisposition = response.headers.get('Content-Disposition');
+                const filename = customFilename || (contentDisposition 
+                    ? contentDisposition.split('filename=')[1].replace(/"/g, '')
+                    : 'bootai-iso.iso');
+                
+                // Create blob and download
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                statusDiv.innerHTML = '<div class="status success">✅ ISO download started!</div>';
+                
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Download failed: ${error.message}</div>`;
+            }
+        }
+
+        function chooseDownloadLocation() {
+            const statusDiv = document.getElementById('downloadStatus');
+            
+            // Create a simple filename input dialog
+            const filename = prompt('Enter filename for the ISO download:', 'bootai-iso.iso');
+            
+            if (filename && filename.trim()) {
+                // Ensure .iso extension
+                const finalFilename = filename.endsWith('.iso') ? filename : filename + '.iso';
+                downloadISO(finalFilename);
+            } else if (filename !== null) {
+                statusDiv.innerHTML = '<div class="status warning">Please enter a valid filename</div>';
+            }
+        }
+
+        async function checkCacheStatus() {
+            const statusDiv = document.getElementById('cacheStatus');
+            statusDiv.innerHTML = '<div class="status info">Checking cache status...</div>';
+            
+            try {
+                const response = await fetch('/api/cache-status');
+                const result = await response.json();
+                
+                if (result.success) {
+                    let html = '<div class="status success">✅ Cache Status</div>';
+                    
+                    if (result.cache.isos.length > 0) {
+                        html += '<div class="mt-3"><strong>📀 Cached ISOs:</strong><ul>';
+                        result.cache.isos.forEach(iso => {
+                            html += `<li>${iso.name} (${iso.size} bytes) - ${iso.date}</li>`;
+                        });
+                        html += '</ul></div>';
+                    } else {
+                        html += '<div class="mt-3"><strong>📀 Cached ISOs:</strong> None</div>';
+                    }
+                    
+                    if (result.cache.models.length > 0) {
+                        html += '<div class="mt-3"><strong>🤖 Cached Models:</strong><ul>';
+                        result.cache.models.forEach(model => {
+                            html += `<li>${model.name} (${model.size}) - ${model.modified}</li>`;
+                        });
+                        html += '</ul></div>';
+                    } else {
+                        html += '<div class="mt-3"><strong>🤖 Cached Models:</strong> None</div>';
+                    }
+                    
+                    statusDiv.innerHTML = html;
+                } else {
+                    statusDiv.innerHTML = `<div class="status error">❌ Error: ${result.error}</div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Error: ${error.message}</div>`;
+            }
+        }
+
+        async function clearCache(type) {
+            const statusDiv = document.getElementById('cacheStatus');
+            const confirmMessage = type === 'all' ? 
+                'Are you sure you want to clear ALL cache (ISOs and models)?' :
+                `Are you sure you want to clear ${type} cache?`;
+            
+            if (!confirm(confirmMessage)) {
+                return;
+            }
+            
+            statusDiv.innerHTML = `<div class="status info">Clearing ${type} cache...</div>`;
+            
+            try {
+                const response = await fetch('/api/clear-cache', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    statusDiv.innerHTML = `<div class="status success">✅ ${result.message}</div>`;
+                } else {
+                    statusDiv.innerHTML = `<div class="status error">❌ Error: ${result.error}</div>`;
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<div class="status error">❌ Error: ${error.message}</div>`;
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            connectWebSocket();
+            checkWSL();
+            refreshUSBDrives();
+        });
+    </script>
+</body>
+</html>
+
