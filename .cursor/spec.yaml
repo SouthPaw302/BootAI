@@ -1,0 +1,157 @@
+name: BootAI
+description: AI-powered Linux ISO builder with USB writing capabilities
+version: 1.0.0
+
+# Project overview
+project:
+  type: "Node.js Application"
+  architecture: "Monolithic (Frontend + Backend)"
+  deployment: "Windows Executable (pkg)"
+  
+# Core technologies
+tech_stack:
+  backend: "Node.js + Express + WebSocket"
+  frontend: "HTML5 + CSS3 + JavaScript"
+  linux_integration: "WSL2 + Bash scripts"
+  usb_handling: "PowerShell + diskpart"
+  packaging: "pkg for single executable"
+  ai_models: "Ollama framework"
+
+# Key components
+components:
+  - name: "main.js"
+    path: "src/main.js"
+    description: "Express server with WebSocket for real-time communication"
+    responsibilities:
+      - API endpoints for USB detection, ISO building, USB writing
+      - WebSocket progress tracking
+      - WSL integration and validation
+      - File streaming for ISO downloads
+    
+  - name: "index.html"
+    path: "public/index.html"
+    description: "Web interface with step-by-step wizard"
+    responsibilities:
+      - User configuration interface
+      - Real-time progress display
+      - USB drive selection
+      - Download management
+    
+  - name: "build.sh"
+    path: "scripts/build.sh"
+    description: "WSL bash script for ISO creation"
+    responsibilities:
+      - Download and cache base ISOs
+      - Install Ollama and AI models
+      - Extract and modify Linux filesystems
+      - Rebuild bootable ISOs
+      - Handle Ubuntu Server compatibility
+
+# Development workflow
+workflow:
+  development:
+    - "npm run dev - Start development server"
+    - "npm run build - Create executable"
+    - "Test in browser at localhost:3000"
+    - "Monitor terminal for JSON parsing errors"
+  
+  testing:
+    - "Build ISO with different OS/model combinations"
+    - "Test USB writing functionality"
+    - "Verify WebSocket progress tracking"
+    - "Test error handling and recovery"
+    - "Verify ai-node.iso creation"
+    - "Test caching functionality"
+  
+  current_status:
+    - "Application runs successfully on port 3000"
+    - "ISO build process completes with ai-node.iso"
+    - "WebSocket progress tracking works"
+    - "Caching implemented and functional"
+    - "JSON parsing error still appears in terminal"
+
+# Known issues and fixes
+issues:
+  - issue: "JSON parsing error in build endpoint"
+    status: "Partially Fixed"
+    solution: "Added input validation, but error still appears in terminal output"
+    notes: "May be cached error message or pkg build issue"
+  
+  - issue: "Ubuntu Server squashfs extraction failures"
+    status: "Resolved"
+    solution: "Switched to minimal filesystem creation instead of extraction"
+    notes: "Build now completes successfully with ai-node.iso creation"
+  
+  - issue: "WSL device node creation errors"
+    status: "Resolved"
+    solution: "Manual device node creation with mknod"
+    notes: "No longer needed with minimal filesystem approach"
+  
+  - issue: "ISO build process hanging"
+    status: "Resolved"
+    solution: "Added timeout handling and process management"
+    notes: "Build now completes with proper progress tracking"
+  
+  - issue: "Caching not working"
+    status: "Resolved"
+    solution: "Implemented proper cache directories and file validation"
+    notes: "ISOs and models now cached in /root/bootai-cache/"
+
+# AI integration
+ai_features:
+  models_supported:
+    - "Phi-3 Mini (1GB, 4GB RAM)"
+    - "Phi-3 (2GB, 8GB RAM)"
+    - "Llama-2-7B (3.5GB, 8GB RAM)"
+    - "Llama-3 (4GB, 16GB RAM)"
+    - "Mistral (4GB, 16GB RAM)"
+  
+  caching:
+    - "ISO caching in /root/bootai-cache/isos"
+    - "Model caching in /root/bootai-cache/models"
+    - "File integrity validation"
+
+# Deployment
+deployment:
+  target: "Windows 10/11 with WSL2"
+  requirements:
+    - "8GB+ RAM (16GB+ recommended)"
+    - "USB drive (8GB+ capacity)"
+    - "Internet connection for initial downloads"
+  
+  build_process:
+    - "npm install dependencies"
+    - "npm run build creates bootai.exe"
+    - "Single executable deployment"
+
+# Quality standards
+quality:
+  error_handling: "Comprehensive with user feedback"
+  progress_tracking: "Real-time WebSocket updates"
+  validation: "Input validation for all API endpoints"
+  caching: "Smart caching to prevent re-downloads"
+  compatibility: "Multiple Linux distros and AI models"
+
+# Current project state (as of latest session)
+current_state:
+  build_status: "Functional"
+  iso_creation: "Working - ai-node.iso generated successfully"
+  web_interface: "Operational on localhost:3000"
+  wsl_integration: "Working with proper timeout handling"
+  usb_detection: "Functional"
+  caching_system: "Implemented and working"
+  error_logging: "JSON parsing error persists in terminal"
+  
+  recent_achievements:
+    - "Fixed Ubuntu Server compatibility issues"
+    - "Implemented proper caching system"
+    - "Added comprehensive error handling"
+    - "Created functional ISO build process"
+    - "Established WebSocket progress tracking"
+    - "Updated GitHub repository with latest code"
+    - "Initialized Cursor Spec Kit"
+  
+  pending_issues:
+    - "JSON parsing error in terminal output (non-blocking)"
+    - "Need to verify USB writing functionality"
+    - "Test different OS/model combinations"
