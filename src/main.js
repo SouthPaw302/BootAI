@@ -3,7 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 const { promisify } = require('util');
 const http = require('http');
 const WebSocket = require('ws');
@@ -16,6 +16,18 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = 3000;
+const projectRoot = path.join(__dirname, '..');
+const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
+
+const hasCommand = (command) => {
+  const lookup = process.platform === 'win32' ? `where ${command}` : `command -v ${command}`;
+  try {
+    execSync(lookup, { stdio: 'ignore' });
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
 
 // WebSocket connection handling
 wss.on('connection', (ws) => {
@@ -151,10 +163,28 @@ app.post('/api/build-iso', async (req, res) => {
   }
   
   try {
-    console.log(`Building ISO for ${baseOs} with ${model}`);
-    
-    // Execute the existing build script in WSL with real-time progress and timeout
-    const buildProcess = exec(`wsl -u root bash scripts/build.sh "${baseOs}" "${model}"`);
+    let buildCommand;
+    let environmentDescription;
+
+    if (process.platform === 'win32') {
+      if (!hasCommand('wsl')) {
+        return res.status(500).json({
+          success: false,
+          error: 'WSL is required on Windows but was not found. Please install WSL and try again.'
+        });
+      }
+
+      buildCommand = `wsl -u root bash scripts/build.sh "${baseOs}" "${model}"`;
+      environmentDescription = 'WSL';
+    } else {
+      buildCommand = `bash "${buildScriptPath}" "${baseOs}" "${model}"`;
+      environmentDescription = 'local bash environment';
+    }
+
+    console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
+
+    // Execute the existing build script with real-time progress and timeout
+    const buildProcess = exec(buildCommand, { cwd: projectRoot });
     
     // Set overall build timeout (30 minutes)
     const buildTimeout = setTimeout(() => {
