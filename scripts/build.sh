@@ -31,7 +31,8 @@ MODEL_CACHE="${CACHE_ROOT}/models"
 BUILD_DIR="$(pwd)/.bootai-build"
 OUTPUT_NAME="bootai-${BASE_OS}-${MODEL_NAME//[:]/-}.iso"
 OUTPUT_PATH="$(pwd)/${OUTPUT_NAME}"
-CANONICAL_OUTPUT="$(pwd)/ai-node.iso"
+CANONICAL_OUTPUT="$(pwd)/bootai-latest.iso"
+LEGACY_OUTPUT="$(pwd)/ai-node.iso"
 
 mkdir -p "${ISO_CACHE}" "${MODEL_CACHE}" "${BUILD_DIR}"
 
@@ -150,11 +151,17 @@ echo "Creating BootAI ISO"
 cp "${BUILD_DIR}/base.iso" "${OUTPUT_PATH}"
 cp "${BUILD_DIR}/base.iso" "${CANONICAL_OUTPUT}"
 
+if ! ln -sf "$(basename "${CANONICAL_OUTPUT}")" "${LEGACY_OUTPUT}" 2>/dev/null; then
+  cp "${BUILD_DIR}/base.iso" "${LEGACY_OUTPUT}"
+fi
+
 sha256sum "${OUTPUT_PATH}" > "${OUTPUT_PATH}.sha256"
 
 cat <<MSG
 BootAI build complete
 ---------------------
-Output ISO : ${OUTPUT_PATH}
-Checksum   : ${OUTPUT_PATH}.sha256
+Output ISO        : ${OUTPUT_PATH}
+Latest ISO        : ${CANONICAL_OUTPUT}
+Legacy ISO (link) : ${LEGACY_OUTPUT}
+Checksum          : ${OUTPUT_PATH}.sha256
 MSG

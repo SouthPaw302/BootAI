@@ -86,7 +86,7 @@ Validates request parameters then spawns `wsl -u root bash scripts/build.sh <bas
   ```
   (The variant message mentions model test timeout when `code === 124`, but the current script exits with `0` on success.)
 - **Validation errors:** Missing parameters or invalid values return HTTP 400 with `{ success: false, error: "…" }`.
-- **Current behaviour:** `scripts/build.sh` downloads/caches the requested distro ISO, optionally pulls the Ollama model, copies the ISO to `bootai-<baseOs>-<model>.iso`, and writes a matching checksum file. Output logs include the keywords consumed by the WebSocket bridge.
+- **Current behaviour:** `scripts/build.sh` downloads/caches the requested distro ISO, optionally pulls the Ollama model, copies the ISO to `bootai-<baseOs>-<model>.iso`, publishes `bootai-latest.iso` (with `ai-node.iso` retained as a compatibility link), and writes a matching checksum file. Output logs include the keywords consumed by the WebSocket bridge.
 
 ### `POST /api/write-usb`
 Initiates USB flashing by creating a diskpart script and invoking diskpart + `dd`.
@@ -94,7 +94,7 @@ Initiates USB flashing by creating a diskpart script and invoking diskpart + `dd
 - **Expected request body:**
   ```json
   {
-    "isoPath": "ai-node.iso",
+    "isoPath": "bootai-latest.iso",
     "usbDevice": "E:",
     "diskNumber": 3 // optional optimisation; backend re-derives if omitted
   }
@@ -113,7 +113,7 @@ Initiates USB flashing by creating a diskpart script and invoking diskpart + `dd
 ### `GET /api/download-iso`
 Streams an ISO file if one exists in the working directory.
 
-- **Success response:** Binary stream with `Content-Type: application/octet-stream` and `Content-Disposition` derived from the on-disk file name. The server searches for `ai-node.iso`, `base.iso`, or distro/model-specific variants.
+- **Success response:** Binary stream with `Content-Type: application/octet-stream` and `Content-Disposition` derived from the on-disk file name. The server searches for `bootai-latest.iso`, `ai-node.iso` (legacy link), or distro/model-specific variants.
 - **Failure response:** HTTP 404 with `{ success: false, error: "No ISO file found. Please build an ISO first." }`.
 
 ### `GET /api/cache-status`

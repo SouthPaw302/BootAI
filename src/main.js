@@ -73,7 +73,7 @@ const buildIsoFilename = (baseOs, model) => {
 
   return `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model).toLowerCase()}.iso`;
 };
-const isBootaiIsoName = (filename) => filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+const isBootaiIsoName = (filename) => filename === 'bootai-latest.iso' || filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
 
 const SIZE_TOLERANCE_BYTES = 10 * 1024 * 1024; // 10 MiB tolerance for size comparisons
 
@@ -810,6 +810,7 @@ app.get('/api/download-iso', async (req, res) => {
         console.warn('Invalid baseOs/model provided for ISO lookup:', filenameError.message);
       }
     }
+    prioritizedNames.push('bootai-latest.iso');
     prioritizedNames.push('ai-node.iso');
 
     const directoryEntries = await fsPromises.readdir(isoDirectory);
@@ -1021,7 +1022,7 @@ app.get('/', (req, res) => {
 
 // Start server
 server.listen(PORT, () => {
-        console.log(`🚀 BootAI running on http://localhost:${PORT}`);
+  console.log(`🚀 BootAI running on http://localhost:${PORT}`);
   console.log('📱 Opening browser...');
   open(`http://localhost:${PORT}`);
 });
