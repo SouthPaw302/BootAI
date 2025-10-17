@@ -267,6 +267,29 @@ const hasCommand = (command) => {
   }
 };
 
+const runCommandWithTimeout = async (file, args, { timeout = 15000 } = {}) => {
+  try {
+    const { stdout } = await execFileAsync(file, args, {
+      timeout,
+      windowsHide: true
+    });
+
+    return {
+      success: true,
+      output: stdout.trim()
+    };
+  } catch (error) {
+    const timeoutMessage = error.killed ? `Command timed out after ${timeout}ms` : '';
+    const stderr = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    const message = timeoutMessage || stderr || error.message;
+    return {
+      success: false,
+      output: typeof error.stdout === 'string' ? error.stdout.trim() : '',
+      error: message
+    };
+  }
+};
+
 // WebSocket connection handling
 wss.on('connection', (ws) => {
   console.log('🔌 Client connected to WebSocket');
@@ -455,6 +478,21 @@ app.post('/api/build-iso', async (req, res) => {
     console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
 
     let lastErrorOutput = '';
+    let lastProgress = 0;
+
+    const emitProgress = ({ stage, message, progress }) => {
+      if (typeof progress === 'number') {
+        lastProgress = Math.max(lastProgress, progress);
+      }
+
+      const resolvedProgress = typeof progress === 'number' ? progress : lastProgress || 0;
+      broadcastProgress({
+        type: 'progress',
+        stage,
+        message,
+        progress: resolvedProgress
+      });
+    };
 
     // Execute the existing build script with real-time progress and timeout
     const buildProcess = spawn(buildCommand, {
@@ -494,49 +532,49 @@ app.post('/api/build-iso', async (req, res) => {
       buildProcess.stdout.on('data', (data) => {
         const output = data.toString();
         console.log('WSL output:', output);
+        const trimmed = output.trim();
 
-        // Parse progress from output
         if (output.includes('Downloading')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'downloading',
-            message: output.trim(),
+            message: trimmed || 'Downloading assets',
             progress: 20
           });
         } else if (output.includes('Installing Ollama')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'installing',
-            message: output.trim(),
+            message: trimmed,
             progress: 40
           });
         } else if (output.includes('Testing model compatibility')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'testing_model',
-            message: output.trim(),
+            message: trimmed,
             progress: 50
           });
         } else if (output.includes('Model') && output.includes('working correctly')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'model_tested',
-            message: output.trim(),
+            message: trimmed,
             progress: 60
           });
         } else if (output.includes('timed out, but continuing')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'model_timeout',
-            message: output.trim(),
+            message: trimmed,
             progress: 60
           });
         } else if (output.includes('Creating BootAI ISO')) {
-          broadcastProgress({
-            type: 'progress',
+          emitProgress({
             stage: 'building_iso',
-            message: output.trim(),
+            message: trimmed,
             progress: 80
+          });
+        } else if (trimmed) {
+          emitProgress({
+            stage: 'log',
+            message: trimmed,
+            progress: lastProgress || 10
           });
         }
       });
@@ -549,11 +587,12 @@ app.post('/api/build-iso', async (req, res) => {
         const trimmed = message.trim();
         if (trimmed) {
           lastErrorOutput = trimmed;
+          emitProgress({
+            stage: 'log',
+            message: trimmed,
+            progress: lastProgress || 10
+          });
         }
-        broadcastProgress({
-          type: 'error',
-          message: trimmed || message
-        });
       });
     }
     
@@ -574,8 +613,7 @@ app.post('/api/build-iso', async (req, res) => {
       clearTimeout(buildTimeout); // Clear the timeout
 
       if (code === 0) {
-        broadcastProgress({
-          type: 'progress',
+        emitProgress({
           stage: 'completed',
           message: '✅ BootAI ISO created successfully!',
           progress: 100
@@ -586,8 +624,7 @@ app.post('/api/build-iso', async (req, res) => {
         });
       } else if (code === 124) {
         // Timeout is acceptable - model test timed out but build can continue
-        broadcastProgress({
-          type: 'progress',
+        emitProgress({
           stage: 'completed',
           message: '✅ BootAI ISO created successfully! (Model test timed out but continuing)',
           progress: 100
@@ -843,73 +880,106 @@ exit`;
 // Comprehensive WSL validation
 const validateWSL = async () => {
   if (isTestMode) {
-    return [
-      {
-        name: 'Test Mode',
-        success: true,
-        output: 'Simulated WSL check',
-        error: null
-      }
-    ];
+    return {
+      available: true,
+      summary: 'WSL checks simulated (test mode)',
+      checks: [
+        {
+          name: 'Test Mode',
+          success: true,
+          output: 'Simulated WSL check',
+          error: null,
+          required: true
+        }
+      ]
+    };
+  }
+
+  if (process.platform !== 'win32') {
+    return {
+      available: true,
+      summary: 'Running on a non-Windows host; WSL is not required.',
+      checks: [
+        {
+          name: 'Platform compatibility',
+          success: true,
+          output: 'Non-Windows environment detected',
+          error: null,
+          required: true
+        }
+      ]
+    };
+  }
+
+  if (!hasCommand('wsl')) {
+    return {
+      available: false,
+      summary: 'wsl.exe was not found on this system. Please install Windows Subsystem for Linux and try again.',
+      checks: [
+        {
+          name: 'WSL executable present',
+          success: false,
+          output: '',
+          error: 'wsl.exe not found in PATH',
+          required: true
+        }
+      ]
+    };
   }
 
   const checks = [
-    { name: 'WSL Status', command: 'wsl --status' },
-    { name: 'WSL List', command: 'wsl --list --verbose' },
-    { name: 'WSL Root Access', command: 'wsl -u root bash -c "echo WSL_ROOT_OK"' },
-    { name: 'Curl Available', command: 'wsl -u root bash -c "which curl"' },
-    { name: 'Apt Available', command: 'wsl -u root bash -c "which apt-get"' },
-    { name: 'Sudo Available', command: 'wsl -u root bash -c "which sudo"' }
-  ];
-  
-  const results = [];
-  
-  for (const check of checks) {
-    try {
-      const result = await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          resolve({ success: false, error: 'Timeout', output: '' });
-        }, 5000);
-        
-        exec(check.command, (error, stdout, stderr) => {
-          clearTimeout(timeout);
-          resolve({
-            success: !error,
-            output: stdout,
-            error: error ? error.message : null
-          });
-        });
-      });
-      
-      results.push({
-        name: check.name,
-        success: result.success,
-        output: result.output,
-        error: result.error
-      });
-    } catch (err) {
-      results.push({
-        name: check.name,
-        success: false,
-        output: '',
-        error: err.message
-      });
+    {
+      name: 'WSL status',
+      args: ['--status'],
+      required: true
+    },
+    {
+      name: 'Installed distributions',
+      args: ['--list', '--verbose'],
+      required: true
+    },
+    {
+      name: 'Root shell access',
+      args: ['-u', 'root', 'bash', '-lc', 'echo BOOTAI_ROOT_OK'],
+      required: false
+    },
+    {
+      name: 'curl availability',
+      args: ['-u', 'root', 'bash', '-lc', 'command -v curl'],
+      required: true
     }
+  ];
+
+  const results = [];
+
+  for (const check of checks) {
+    const outcome = await runCommandWithTimeout('wsl', check.args, { timeout: check.required ? 15000 : 10000 });
+    results.push({
+      name: check.name,
+      success: outcome.success,
+      output: outcome.output,
+      error: outcome.success ? null : outcome.error,
+      required: check.required
+    });
   }
-  
-  return results;
+
+  const criticalFailures = results.filter((result) => result.required && !result.success);
+  const available = criticalFailures.length === 0;
+  const summary = available
+    ? 'All required WSL checks passed'
+    : `WSL reported ${criticalFailures.length} blocking issue${criticalFailures.length === 1 ? '' : 's'}.`;
+
+  return {
+    available,
+    summary,
+    checks: results
+  };
 };
 
 app.get('/api/wsl-status', async (req, res) => {
   try {
-    const validationResults = await validateWSL();
-    const allPassed = validationResults.every(result => result.success);
-    
-    res.json({
-      available: allPassed,
-      checks: validationResults,
-      summary: allPassed ? 'All WSL checks passed' : 'Some WSL checks failed'
-    });
+    const validation = await validateWSL();
+    res.json(validation);
   } catch (error) {
     res.json({
       available: false,
