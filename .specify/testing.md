@@ -27,7 +27,7 @@
 5. **Observe WebSocket logs** in the server console for progress/error events when the build endpoint is triggered.
 6. **Verify ISO outputs and USB write workflow**:
    ```bash
-   ls -lh bootai-*.iso ai-node.iso*
+   ls -lh bootai-*.iso bootai-latest.iso ai-node.iso*
    sha256sum -c bootai-*.iso.sha256
    ```
    If testing on Windows hardware, initiate `/api/write-usb` and watch for `formatting_usb`, `usb_formatted`, `writing_iso`, and `usb_write_completed` progress events in the console.

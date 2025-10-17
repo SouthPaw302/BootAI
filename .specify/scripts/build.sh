@@ -13,7 +13,7 @@ cat <<'MSG'
 BootAI build summary
 --------------------
 - The repository provides a Node.js/Express server, static UI assets, and a WSL build script at scripts/build.sh.
-- The build script downloads the selected distro ISO, caches it under /root/bootai-cache/isos/, sets `OLLAMA_MODELS=/root/bootai-cache/models` before invoking Ollama, and emits bootai-<base>-<model>.iso plus a checksum file.
+- The build script downloads the selected distro ISO, caches it under /root/bootai-cache/isos/, sets `OLLAMA_MODELS=/root/bootai-cache/models` before invoking Ollama, and emits bootai-<base>-<model>.iso plus canonical/legacy links.
 - ISO contents are not yet customised beyond caching; future work will mount/chroot into the filesystem.
 MSG
 
@@ -32,7 +32,7 @@ The script will:
   1. Ensure /root/bootai-cache/{isos,models} exist
   2. Download (or reuse cached) ISO images
   3. Attempt to cache the Ollama model when available (respecting OLLAMA_MODELS=/root/bootai-cache/models)
-  4. Produce bootai-<base>-<model>.iso, ai-node.iso, and a SHA-256 checksum
+  4. Produce bootai-<base>-<model>.iso, bootai-latest.iso (with ai-node.iso for legacy tools), and a SHA-256 checksum
 
 Re-run with arguments to execute the build automatically.
 MSG

@@ -3,13 +3,14 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const http = require('http');
 const WebSocket = require('ws');
 const open = require('open');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const fsPromises = fs.promises;
 
 const app = express();
@@ -18,6 +19,197 @@ const wss = new WebSocket.Server({ server });
 const PORT = 3000;
 const projectRoot = path.join(__dirname, '..');
 const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
+const publicDir = path.join(projectRoot, 'public');
+
+const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+const wslPathCache = new Map();
+
+const ensureWslPath = async (originalPath) => {
+  if (!originalPath) {
+    throw new Error('Path cannot be empty');
+  }
+
+  if (originalPath.startsWith('/')) {
+    return originalPath;
+  }
+
+  if (process.platform !== 'win32') {
+    return originalPath;
+  }
+
+  const cacheKey = originalPath;
+  if (wslPathCache.has(cacheKey)) {
+    return wslPathCache.get(cacheKey);
+  }
+
+  try {
+    const { stdout } = await execFileAsync('wsl', ['wslpath', '-a', originalPath]);
+    const converted = stdout.trim();
+    if (converted) {
+      wslPathCache.set(cacheKey, converted);
+      return converted;
+    }
+  } catch (conversionError) {
+    console.warn('Failed to convert path to WSL format:', conversionError.message);
+  }
+
+  const normalized = originalPath.replace(/\\/g, '/');
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    const driveLetter = normalized[0].toLowerCase();
+    const fallback = `/mnt/${driveLetter}${normalized.slice(2)}`;
+    wslPathCache.set(cacheKey, fallback);
+    return fallback;
+  }
+
+  wslPathCache.set(cacheKey, normalized);
+  return normalized;
+};
+
+const sanitizeModelIdentifier = (model) => String(model).replace(/[:\s]+/g, '-');
+const buildIsoFilename = (baseOs, model) => {
+  if (!baseOs || !model) {
+    throw new Error('Both baseOs and model are required to build ISO filename');
+  }
+
+  return `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model).toLowerCase()}.iso`;
+};
+const isBootaiIsoName = (filename) => filename === 'bootai-latest.iso' || filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+
+const SIZE_TOLERANCE_BYTES = 10 * 1024 * 1024; // 10 MiB tolerance for size comparisons
+
+const parseSizeToBytes = (value) => {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toUpperCase();
+  const matches = normalized.match(/^([0-9]+(?:\.[0-9]+)?)([KMGTPEZY]?)(I?B)?$/);
+
+  if (!matches) {
+    const numeric = Number(normalized);
+    return Number.isFinite(numeric) ? numeric : null;
+  }
+
+  const amount = parseFloat(matches[1]);
+  if (!Number.isFinite(amount)) {
+    return null;
+  }
+
+  const unit = matches[2];
+  const multipliers = {
+    '': 1,
+    K: 1024,
+    M: 1024 ** 2,
+    G: 1024 ** 3,
+    T: 1024 ** 4,
+    P: 1024 ** 5,
+    E: 1024 ** 6,
+    Z: 1024 ** 7,
+    Y: 1024 ** 8
+  };
+
+  const multiplier = multipliers[unit] || 1;
+  return Math.round(amount * multiplier);
+};
+
+const resolveWslBlockDevice = async (diskNumber) => {
+  const numericDisk = Number(diskNumber);
+  if (!Number.isInteger(numericDisk) || numericDisk < 0) {
+    throw new Error(`Invalid disk number '${diskNumber}'`);
+  }
+
+  if (process.platform !== 'win32') {
+    return `/dev/sd${String.fromCharCode(97 + numericDisk)}`;
+  }
+
+  let diskMetadata;
+  try {
+    const { stdout } = await execAsync(`powershell -Command "Get-Disk -Number ${numericDisk} | Select-Object -Property SerialNumber,Size,Model | ConvertTo-Json"`);
+    diskMetadata = JSON.parse(stdout || 'null');
+  } catch (diskError) {
+    throw new Error(`Unable to inspect Windows disk ${numericDisk}: ${diskError.message}`);
+  }
+
+  if (Array.isArray(diskMetadata)) {
+    diskMetadata = diskMetadata[0];
+  }
+
+  if (!diskMetadata) {
+    throw new Error(`No metadata returned for Windows disk ${numericDisk}`);
+  }
+
+  const windowsSerial = (diskMetadata.SerialNumber || '').trim();
+  const windowsSize = parseSizeToBytes(diskMetadata.Size);
+  const windowsModel = (diskMetadata.Model || '').trim().toLowerCase();
+
+  let lsblkOutput;
+  try {
+    const { stdout } = await execAsync('wsl -u root bash -c "lsblk -J -o NAME,SERIAL,SIZE,MODEL,TYPE"');
+    lsblkOutput = JSON.parse(stdout || '{}');
+  } catch (lsblkError) {
+    throw new Error(`Unable to query block devices inside WSL: ${lsblkError.message}`);
+  }
+
+  const blockDevices = Array.isArray(lsblkOutput.blockdevices) ? lsblkOutput.blockdevices : [];
+  const disks = blockDevices.filter(device => device.type === 'disk');
+
+  const findMatchBySerial = () => {
+    if (!windowsSerial) {
+      return null;
+    }
+
+    const matches = disks.filter(device => (device.serial || '').trim().toLowerCase() === windowsSerial.toLowerCase());
+    return matches.length === 1 ? matches[0] : null;
+  };
+
+  const findMatchBySize = () => {
+    if (!windowsSize) {
+      return [];
+    }
+
+    return disks.filter(device => {
+      const deviceSize = parseSizeToBytes(device.size);
+      return deviceSize && Math.abs(deviceSize - windowsSize) <= SIZE_TOLERANCE_BYTES;
+    });
+  };
+
+  const serialMatch = findMatchBySerial();
+  if (serialMatch) {
+    return `/dev/${serialMatch.name}`;
+  }
+
+  const sizeMatches = findMatchBySize();
+  if (sizeMatches.length === 1) {
+    return `/dev/${sizeMatches[0].name}`;
+  }
+
+  if (sizeMatches.length > 1 && windowsModel) {
+    const modelMatches = sizeMatches.filter(device => (device.model || '').toLowerCase().includes(windowsModel));
+    if (modelMatches.length === 1) {
+      return `/dev/${modelMatches[0].name}`;
+    }
+  }
+
+  const diagnosticSummary = disks.map(device => ({
+    name: device.name,
+    serial: device.serial,
+    size: device.size,
+    model: device.model
+  }));
+  console.error('Unable to map Windows disk to WSL block device', {
+    diskNumber: numericDisk,
+    windowsSerial,
+    windowsSize,
+    windowsModel,
+    candidates: diagnosticSummary
+  });
+
+  throw new Error('Unable to determine the correct WSL block device for the selected disk. Please ensure it is attached and try again.');
+};
 
 const hasCommand = (command) => {
   const lookup = process.platform === 'win32' ? `where ${command}` : `command -v ${command}`;
@@ -50,7 +242,7 @@ const broadcastProgress = (data) => {
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static(publicDir));
 
 // USB Detection via PowerShell with timeout
 const scanUSBDrives = async () => {
@@ -174,7 +366,12 @@ app.post('/api/build-iso', async (req, res) => {
         });
       }
 
-      buildCommand = `wsl -u root bash scripts/build.sh "${baseOs}" "${model}"`;
+      const wslProjectRoot = await ensureWslPath(projectRoot);
+      const escapedProjectRoot = escapeForSingleQuotes(wslProjectRoot);
+      const escapedBaseOs = escapeForSingleQuotes(baseOs);
+      const escapedModel = escapeForSingleQuotes(model);
+      const wslCommand = `cd '${escapedProjectRoot}' && bash './scripts/build.sh' '${escapedBaseOs}' '${escapedModel}'`;
+      buildCommand = `wsl -u root bash -c "${wslCommand}"`;
       environmentDescription = 'WSL';
     } else {
       buildCommand = `bash "${buildScriptPath}" "${baseOs}" "${model}"`;
@@ -183,8 +380,29 @@ app.post('/api/build-iso', async (req, res) => {
 
     console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
 
+    let lastErrorOutput = '';
+
     // Execute the existing build script with real-time progress and timeout
-    const buildProcess = exec(buildCommand, { cwd: projectRoot });
+    const buildProcess = spawn(buildCommand, {
+      cwd: projectRoot,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let responseSent = false;
+    const sendErrorResponse = (statusCode, payload) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.status(statusCode).json(payload);
+      }
+    };
+
+    const sendSuccessResponse = (payload) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.json(payload);
+      }
+    };
     
     // Set overall build timeout (30 minutes)
     const buildTimeout = setTimeout(() => {
@@ -198,67 +416,89 @@ app.post('/api/build-iso', async (req, res) => {
       }
     }, 30 * 60 * 1000);
     
-    buildProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      console.log('WSL output:', output);
-      
-      // Parse progress from output
-      if (output.includes('Downloading')) {
+    if (buildProcess.stdout) {
+      buildProcess.stdout.on('data', (data) => {
+        const output = data.toString();
+        console.log('WSL output:', output);
+
+        // Parse progress from output
+        if (output.includes('Downloading')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'downloading',
+            message: output.trim(),
+            progress: 20
+          });
+        } else if (output.includes('Installing Ollama')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'installing',
+            message: output.trim(),
+            progress: 40
+          });
+        } else if (output.includes('Testing model compatibility')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'testing_model',
+            message: output.trim(),
+            progress: 50
+          });
+        } else if (output.includes('Model') && output.includes('working correctly')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'model_tested',
+            message: output.trim(),
+            progress: 60
+          });
+        } else if (output.includes('timed out, but continuing')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'model_timeout',
+            message: output.trim(),
+            progress: 60
+          });
+        } else if (output.includes('Creating BootAI ISO')) {
+          broadcastProgress({
+            type: 'progress',
+            stage: 'building_iso',
+            message: output.trim(),
+            progress: 80
+          });
+        }
+      });
+    }
+
+    if (buildProcess.stderr) {
+      buildProcess.stderr.on('data', (data) => {
+        const message = data.toString();
+        console.error('WSL error:', message);
+        const trimmed = message.trim();
+        if (trimmed) {
+          lastErrorOutput = trimmed;
+        }
         broadcastProgress({
-          type: 'progress',
-          stage: 'downloading',
-          message: output.trim(),
-          progress: 20
+          type: 'error',
+          message: trimmed || message
         });
-      } else if (output.includes('Installing Ollama')) {
-        broadcastProgress({
-          type: 'progress',
-          stage: 'installing',
-          message: output.trim(),
-          progress: 40
-        });
-      } else if (output.includes('Testing model compatibility')) {
-        broadcastProgress({
-          type: 'progress',
-          stage: 'testing_model',
-          message: output.trim(),
-          progress: 50
-        });
-      } else if (output.includes('Model') && output.includes('working correctly')) {
-        broadcastProgress({
-          type: 'progress',
-          stage: 'model_tested',
-          message: output.trim(),
-          progress: 60
-        });
-      } else if (output.includes('timed out, but continuing')) {
-        broadcastProgress({
-          type: 'progress',
-          stage: 'model_timeout',
-          message: output.trim(),
-          progress: 60
-        });
-      } else if (output.includes('Creating BootAI ISO')) {
-        broadcastProgress({
-          type: 'progress',
-          stage: 'building_iso',
-          message: output.trim(),
-          progress: 80
-        });
-      }
-    });
+      });
+    }
     
-    buildProcess.stderr.on('data', (data) => {
-      console.error('WSL error:', data.toString());
+    buildProcess.on('error', (spawnError) => {
+      clearTimeout(buildTimeout);
+      console.error('Build process failed to start:', spawnError);
       broadcastProgress({
         type: 'error',
-        message: data.toString().trim()
+        message: `Failed to start build process: ${spawnError.message}`
+      });
+      sendErrorResponse(500, {
+        success: false,
+        error: `Failed to start build process: ${spawnError.message}`
       });
     });
-    
+
     buildProcess.on('close', (code) => {
       clearTimeout(buildTimeout); // Clear the timeout
-      
+
       if (code === 0) {
         broadcastProgress({
           type: 'progress',
@@ -266,8 +506,8 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully!',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully'
         });
       } else if (code === 124) {
@@ -278,8 +518,8 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully! (Model test timed out but continuing)',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully (model test timed out)'
         });
       } else {
@@ -287,18 +527,20 @@ app.post('/api/build-iso', async (req, res) => {
           type: 'error',
           message: `Build failed with exit code ${code}`
         });
-        res.status(500).json({ 
-          success: false, 
-          error: `Build failed with exit code ${code}`
+        sendErrorResponse(500, {
+          success: false,
+          error: `Build failed with exit code ${code}`,
+          details: lastErrorOutput || undefined
         });
       }
     });
-    
+
   } catch (error) {
     console.error('Build error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.stderr || error.stdout || undefined
     });
   }
 });
@@ -330,27 +572,6 @@ app.post('/api/write-usb', async (req, res) => {
 
   const driveLetter = usbDevice.replace(':', '').toUpperCase();
 
-  const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
-
-  const ensureWslPath = async (originalPath) => {
-    if (!originalPath) {
-      throw new Error('ISO path is empty');
-    }
-
-    if (originalPath.startsWith('/')) {
-      return originalPath;
-    }
-
-    try {
-      const { stdout } = await execAsync(`wsl wslpath '${escapeForSingleQuotes(originalPath)}'`);
-      const converted = stdout.trim();
-      return converted || originalPath;
-    } catch (conversionError) {
-      console.warn('Failed to convert ISO path to WSL format:', conversionError.message);
-      return originalPath;
-    }
-  };
-
   let tempDir;
   const cleanupTempArtifacts = async () => {
     if (!tempDir) {
@@ -367,7 +588,18 @@ app.post('/api/write-usb', async (req, res) => {
   let responseSent = false;
 
   try {
-    console.log(`Writing ${isoPath} to ${usbDevice}`);
+    const isoAbsolutePath = path.isAbsolute(isoPath) ? isoPath : path.join(projectRoot, isoPath);
+
+    try {
+      await fsPromises.access(isoAbsolutePath, fs.constants.R_OK);
+    } catch (accessError) {
+      return res.status(404).json({
+        success: false,
+        error: `ISO file not found or inaccessible at ${isoAbsolutePath}`
+      });
+    }
+
+    console.log(`Writing ${isoAbsolutePath} to ${usbDevice}`);
 
     let diskNumber = providedDiskNumber;
 
@@ -436,7 +668,7 @@ exit`;
 
         let wslIsoPath;
         try {
-          wslIsoPath = await ensureWslPath(isoPath);
+          wslIsoPath = await ensureWslPath(isoAbsolutePath);
         } catch (pathError) {
           console.error('ISO path conversion error:', pathError);
           broadcastProgress({
@@ -446,7 +678,18 @@ exit`;
           return;
         }
 
-        const targetDevice = `/dev/sd${String.fromCharCode(97 + numericDiskNumber)}`;
+        let targetDevice;
+        try {
+          targetDevice = await resolveWslBlockDevice(numericDiskNumber);
+        } catch (mappingError) {
+          console.error('Disk mapping error:', mappingError);
+          broadcastProgress({
+            type: 'error',
+            message: `Could not resolve target disk in WSL: ${mappingError.message}`
+          });
+          return;
+        }
+
         const isoWriteCommand = `wsl -u root bash -c "dd if='${escapeForSingleQuotes(wslIsoPath)}' of='${targetDevice}' bs=4M status=progress conv=fsync"`;
 
         broadcastProgress({
@@ -478,17 +721,19 @@ exit`;
           });
         });
 
-        writeProcess.stderr?.on('data', (chunk) => {
-          const output = chunk.toString().trim();
-          if (output) {
-            broadcastProgress({
-              type: 'progress',
-              stage: 'writing_iso',
-              message: output,
-              progress: 95
-            });
-          }
-        });
+        if (writeProcess.stderr) {
+          writeProcess.stderr.on('data', (chunk) => {
+            const output = chunk.toString().trim();
+            if (output) {
+              broadcastProgress({
+                type: 'progress',
+                stage: 'writing_iso',
+                message: output,
+                progress: 95
+              });
+            }
+          });
+        }
       })().catch((pipelineError) => {
         console.error('USB write pipeline error:', pipelineError);
         broadcastProgress({
@@ -592,39 +837,69 @@ app.get('/api/wsl-status', async (req, res) => {
 // ISO Download endpoint
 app.get('/api/download-iso', async (req, res) => {
   try {
-    // Look for the generated ISO file
-    const possiblePaths = [
-      'ai-node.iso',
-      'base.iso',
-      'bootai-ubuntu-22.04-phi3:mini.iso',
-      'bootai-ubuntu-24.04-phi3:mini.iso',
-      'bootai-debian-12-phi3:mini.iso'
-    ];
-    
-    let isoPath = null;
-    for (const possiblePath of possiblePaths) {
-      if (fs.existsSync(possiblePath)) {
-        isoPath = possiblePath;
-        break;
+    const { baseOs, model } = req.query;
+    const isoDirectory = projectRoot;
+
+    const prioritizedNames = [];
+    if (baseOs && model) {
+      try {
+        prioritizedNames.push(buildIsoFilename(baseOs, model));
+      } catch (filenameError) {
+        console.warn('Invalid baseOs/model provided for ISO lookup:', filenameError.message);
       }
     }
-    
-    if (!isoPath) {
+    prioritizedNames.push('bootai-latest.iso');
+    prioritizedNames.push('ai-node.iso');
+
+    const directoryEntries = await fsPromises.readdir(isoDirectory);
+    const isoFiles = [];
+    for (const entry of directoryEntries) {
+      if (!isBootaiIsoName(entry)) {
+        continue;
+      }
+
+      const fullPath = path.join(isoDirectory, entry);
+      try {
+        const stats = await fsPromises.stat(fullPath);
+        if (!stats.isFile()) {
+          continue;
+        }
+        isoFiles.push({
+          name: entry,
+          fullPath,
+          size: stats.size,
+          mtimeMs: stats.mtimeMs
+        });
+      } catch (statError) {
+        console.warn(`Failed to stat ISO candidate ${entry}:`, statError.message);
+      }
+    }
+
+    if (isoFiles.length === 0) {
       return res.status(404).json({
         success: false,
         error: 'No ISO file found. Please build an ISO first.'
       });
     }
-    
-    const fullPath = path.resolve(isoPath);
-    const stats = fs.statSync(fullPath);
-    
+
+    const findPrioritizedIso = () => {
+      for (const name of prioritizedNames) {
+        const match = isoFiles.find(file => file.name === name);
+        if (match) {
+          return match;
+        }
+      }
+      return null;
+    };
+
+    const isoFile = findPrioritizedIso() || isoFiles.sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${path.basename(isoPath)}"`);
-    res.setHeader('Content-Length', stats.size);
-    
+    res.setHeader('Content-Disposition', `attachment; filename="${isoFile.name}"`);
+    res.setHeader('Content-Length', isoFile.size);
+
     // Stream the file with timeout
-    const fileStream = fs.createReadStream(fullPath);
+    const fileStream = fs.createReadStream(isoFile.fullPath);
     
     // Set timeout for large file downloads (10 minutes)
     const downloadTimeout = setTimeout(() => {
@@ -780,12 +1055,12 @@ app.post('/api/clear-cache', async (req, res) => {
 
 // Serve the main page
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(publicDir, 'index.html'));
 });
 
 // Start server
 server.listen(PORT, () => {
-        console.log(`🚀 BootAI running on http://localhost:${PORT}`);
+  console.log(`🚀 BootAI running on http://localhost:${PORT}`);
   console.log('📱 Opening browser...');
   open(`http://localhost:${PORT}`);
 });

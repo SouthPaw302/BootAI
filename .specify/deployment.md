@@ -45,7 +45,8 @@ BootAI runs as a Node.js service that opens a browser-based UI on port 3000. The
    ```
 3. On success, the script emits:
    - `bootai-<base>-<model>.iso`
-   - `ai-node.iso` (legacy name for compatibility)
+   - `bootai-latest.iso` (canonical filename)
+   - `ai-node.iso` (legacy link for compatibility)
    - `bootai-<base>-<model>.iso.sha256`
 4. ISO downloads are cached under `/root/bootai-cache/isos/`; reruns reuse the cached images.
 5. Ollama models are pulled when the CLI is installed; failures log warnings but do not abort the build.
