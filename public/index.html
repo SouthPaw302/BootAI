@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BootAI</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' ry='3' fill='%23667eea'/%3E%3Ctext x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-family='Segoe UI' font-size='9' fill='white'%3EAI%3C/text%3E%3C/svg%3E">
     <style>
         * {
             margin: 0;
@@ -310,7 +311,7 @@
         <!-- Step 2: Build ISO -->
         <div class="step" id="step2">
             <h3><span class="step-number">2</span>Build ISO</h3>
-            <p>This will download the base OS, install Ollama, and create a bootable AI Node ISO.</p>
+            <p>This will download the base OS, install Ollama, and create a bootable BootAI ISO.</p>
             <button class="btn" id="buildBtn" onclick="buildISO()">Start Building ISO</button>
             <div class="progress hidden" id="buildProgress">
                 <div class="progress-bar" id="buildProgressBar">0%</div>
@@ -492,7 +493,7 @@
             buildBtn.textContent = 'Building...';
             progressDiv.classList.remove('hidden');
             
-            statusDiv.innerHTML = '<div class="status info">Starting AI Node build process...</div>';
+            statusDiv.innerHTML = '<div class="status info">Starting BootAI build process...</div>';
             
             try {
                 const response = await fetch('/api/build-iso', {
@@ -504,19 +505,24 @@
                 lastBuildRequest = { baseOs, model };
                 isoPath = buildIsoFilename(baseOs, model);
 
+ codex/perform-deep-error-scan-and-report-0n0491
+
                 if (!response.ok) {
                     const errorData = await response.json();
                     throw new Error(errorData.error || `HTTP ${response.status}`);
                 }
                 
+ main
                 const result = await response.json();
-                
-                if (!result.success) {
-                    throw new Error(result.error);
+
+                if (!response.ok || !result.success) {
+                    const baseMessage = result.error || `HTTP ${response.status}`;
+                    const details = result.details ? ` (${result.details})` : '';
+                    throw new Error(`${baseMessage}${details}`);
                 }
-                
+
                 // Progress updates will come via WebSocket
-                
+
             } catch (error) {
                 console.error('Build error:', error);
                 statusDiv.innerHTML = `<div class="status error">❌ Build failed: ${error.message}</div>`;
@@ -675,9 +681,9 @@
                 
                 // Get filename from Content-Disposition header
                 const contentDisposition = response.headers.get('Content-Disposition');
-                const filename = customFilename || (contentDisposition 
+                const filename = customFilename || (contentDisposition
                     ? contentDisposition.split('filename=')[1].replace(/"/g, '')
-                    : 'bootai-iso.iso');
+                    : 'bootai-latest.iso');
                 
                 // Create blob and download
                 const blob = await response.blob();
@@ -701,7 +707,7 @@
             const statusDiv = document.getElementById('downloadStatus');
             
             // Create a simple filename input dialog
-            const filename = prompt('Enter filename for the ISO download:', 'bootai-iso.iso');
+            const filename = prompt('Enter filename for the ISO download:', 'bootai-latest.iso');
             
             if (filename && filename.trim()) {
                 // Ensure .iso extension

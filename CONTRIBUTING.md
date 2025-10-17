@@ -1,17 +1,17 @@
-# Contributing to AI Node Builder
+# Contributing to BootAI
 
-Thank you for your interest in contributing to AI Node Builder! 🎉
+Thank you for your interest in contributing to BootAI! 🎉
 
 ## 🤝 How to Contribute
 
 ### Reporting Issues
-- Use the [GitHub Issues](https://github.com/yourusername/ai-node-builder/issues) page
+- Use the [GitHub Issues](https://github.com/SouthPaw302/bootai/issues) page
 - Include system information (Windows version, WSL version, RAM)
 - Provide steps to reproduce the issue
 - Include error messages and logs
 
 ### Suggesting Features
-- Use [GitHub Discussions](https://github.com/yourusername/ai-node-builder/discussions) for feature requests
+- Use [GitHub Discussions](https://github.com/SouthPaw302/bootai/discussions) for feature requests
 - Describe the use case and expected behavior
 - Consider if it fits the project's scope
 
@@ -20,8 +20,8 @@ Thank you for your interest in contributing to AI Node Builder! 🎉
 #### Setup Development Environment
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ai-node-builder.git
-cd ai-node-builder
+git clone https://github.com/SouthPaw302/bootai.git
+cd bootai
 
 # Install dependencies
 npm install
@@ -125,7 +125,7 @@ Any additional information for reviewers
 ### Key Components
 - **`src/main.js`** - Express server with WebSocket support
 - **`public/index.html`** - Web interface
-- **`scripts/ainode-build.sh`** - Linux build script
+- **`scripts/build.sh`** - Linux build script
 - **`package.json`** - Dependencies and scripts
 
 ### Important Concepts
@@ -153,8 +153,8 @@ Any additional information for reviewers
 
 ## 📞 Getting Help
 
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/ai-node-builder/discussions)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/ai-node-builder/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/SouthPaw302/bootai/discussions)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/SouthPaw302/bootai/issues)
 - 📧 **Email**: your-email@example.com
 
 ## 🙏 Recognition
@@ -164,4 +164,4 @@ Contributors will be recognized in:
 - Release notes
 - Project documentation
 
-Thank you for contributing to AI Node Builder! 🚀
+Thank you for contributing to BootAI! 🚀

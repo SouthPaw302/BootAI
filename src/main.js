@@ -3,13 +3,14 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const http = require('http');
 const WebSocket = require('ws');
 const open = require('open');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const fsPromises = fs.promises;
 
 const app = express();
@@ -21,6 +22,11 @@ const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
 const publicDir = path.join(projectRoot, 'public');
 
 const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+ codex/perform-deep-error-scan-and-report-0n0491
+const wslPathCache = new Map();
+
+
+main
 const ensureWslPath = async (originalPath) => {
   if (!originalPath) {
     throw new Error('Path cannot be empty');
@@ -34,6 +40,34 @@ const ensureWslPath = async (originalPath) => {
     return originalPath;
   }
 
+codex/perform-deep-error-scan-and-report-0n0491
+  const cacheKey = originalPath;
+  if (wslPathCache.has(cacheKey)) {
+    return wslPathCache.get(cacheKey);
+  }
+
+  try {
+    const { stdout } = await execFileAsync('wsl', ['wslpath', '-a', originalPath]);
+    const converted = stdout.trim();
+    if (converted) {
+      wslPathCache.set(cacheKey, converted);
+      return converted;
+    }
+  } catch (conversionError) {
+    console.warn('Failed to convert path to WSL format:', conversionError.message);
+  }
+
+  const normalized = originalPath.replace(/\\/g, '/');
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    const driveLetter = normalized[0].toLowerCase();
+    const fallback = `/mnt/${driveLetter}${normalized.slice(2)}`;
+    wslPathCache.set(cacheKey, fallback);
+    return fallback;
+  }
+
+  wslPathCache.set(cacheKey, normalized);
+  return normalized;
+
   try {
     const { stdout } = await execAsync(`wsl wslpath '${escapeForSingleQuotes(originalPath)}'`);
     const converted = stdout.trim();
@@ -42,6 +76,7 @@ const ensureWslPath = async (originalPath) => {
     console.warn('Failed to convert path to WSL format:', conversionError.message);
     return originalPath;
   }
+ main
 };
 
 const sanitizeModelIdentifier = (model) => String(model).replace(/[:\s]+/g, '-');
@@ -52,7 +87,11 @@ const buildIsoFilename = (baseOs, model) => {
 
   return `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model).toLowerCase()}.iso`;
 };
+ codex/perform-deep-error-scan-and-report-0n0491
+const isBootaiIsoName = (filename) => filename === 'bootai-latest.iso' || filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+
 const isBootaiIsoName = (filename) => filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+main
 
 const SIZE_TOLERANCE_BYTES = 10 * 1024 * 1024; // 10 MiB tolerance for size comparisons
 
@@ -345,11 +384,20 @@ app.post('/api/build-iso', async (req, res) => {
         });
       }
 
+ codex/perform-deep-error-scan-and-report-0n0491
+      const wslProjectRoot = await ensureWslPath(projectRoot);
+      const escapedProjectRoot = escapeForSingleQuotes(wslProjectRoot);
+      const escapedBaseOs = escapeForSingleQuotes(baseOs);
+      const escapedModel = escapeForSingleQuotes(model);
+      const wslCommand = `cd '${escapedProjectRoot}' && bash './scripts/build.sh' '${escapedBaseOs}' '${escapedModel}'`;
+      buildCommand = `wsl -u root bash -c "${wslCommand}"`;
+
       const wslBuildScriptPath = await ensureWslPath(buildScriptPath);
       const escapedScript = escapeForSingleQuotes(wslBuildScriptPath);
       const escapedBaseOs = escapeForSingleQuotes(baseOs);
       const escapedModel = escapeForSingleQuotes(model);
       buildCommand = `wsl -u root bash -c "bash '${escapedScript}' '${escapedBaseOs}' '${escapedModel}'"`;
+main
       environmentDescription = 'WSL';
     } else {
       buildCommand = `bash "${buildScriptPath}" "${baseOs}" "${model}"`;
@@ -358,8 +406,29 @@ app.post('/api/build-iso', async (req, res) => {
 
     console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
 
+    let lastErrorOutput = '';
+
     // Execute the existing build script with real-time progress and timeout
-    const buildProcess = exec(buildCommand, { cwd: projectRoot });
+    const buildProcess = spawn(buildCommand, {
+      cwd: projectRoot,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    let responseSent = false;
+    const sendErrorResponse = (statusCode, payload) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.status(statusCode).json(payload);
+      }
+    };
+
+    const sendSuccessResponse = (payload) => {
+      if (!responseSent) {
+        responseSent = true;
+        res.json(payload);
+      }
+    };
     
     // Set overall build timeout (30 minutes)
     const buildTimeout = setTimeout(() => {
@@ -373,7 +442,7 @@ app.post('/api/build-iso', async (req, res) => {
       }
     }, 30 * 60 * 1000);
     
-    buildProcess.stdout.on('data', (data) => {
+    buildProcess.stdout?.on('data', (data) => {
       const output = data.toString();
       console.log('WSL output:', output);
       
@@ -423,17 +492,35 @@ app.post('/api/build-iso', async (req, res) => {
       }
     });
     
-    buildProcess.stderr.on('data', (data) => {
-      console.error('WSL error:', data.toString());
+    buildProcess.stderr?.on('data', (data) => {
+      const message = data.toString();
+      console.error('WSL error:', message);
+      const trimmed = message.trim();
+      if (trimmed) {
+        lastErrorOutput = trimmed;
+      }
       broadcastProgress({
         type: 'error',
-        message: data.toString().trim()
+        message: trimmed || message
       });
     });
     
+    buildProcess.on('error', (spawnError) => {
+      clearTimeout(buildTimeout);
+      console.error('Build process failed to start:', spawnError);
+      broadcastProgress({
+        type: 'error',
+        message: `Failed to start build process: ${spawnError.message}`
+      });
+      sendErrorResponse(500, {
+        success: false,
+        error: `Failed to start build process: ${spawnError.message}`
+      });
+    });
+
     buildProcess.on('close', (code) => {
       clearTimeout(buildTimeout); // Clear the timeout
-      
+
       if (code === 0) {
         broadcastProgress({
           type: 'progress',
@@ -441,8 +528,8 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully!',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully'
         });
       } else if (code === 124) {
@@ -453,8 +540,8 @@ app.post('/api/build-iso', async (req, res) => {
           message: '✅ BootAI ISO created successfully! (Model test timed out but continuing)',
           progress: 100
         });
-        res.json({ 
-          success: true, 
+        sendSuccessResponse({
+          success: true,
           message: 'ISO build completed successfully (model test timed out)'
         });
       } else {
@@ -462,18 +549,20 @@ app.post('/api/build-iso', async (req, res) => {
           type: 'error',
           message: `Build failed with exit code ${code}`
         });
-        res.status(500).json({ 
-          success: false, 
-          error: `Build failed with exit code ${code}`
+        sendErrorResponse(500, {
+          success: false,
+          error: `Build failed with exit code ${code}`,
+          details: lastErrorOutput || undefined
         });
       }
     });
-    
+
   } catch (error) {
     console.error('Build error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message 
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      details: error.stderr || error.stdout || undefined
     });
   }
 });
@@ -521,7 +610,18 @@ app.post('/api/write-usb', async (req, res) => {
   let responseSent = false;
 
   try {
-    console.log(`Writing ${isoPath} to ${usbDevice}`);
+    const isoAbsolutePath = path.isAbsolute(isoPath) ? isoPath : path.join(projectRoot, isoPath);
+
+    try {
+      await fsPromises.access(isoAbsolutePath, fs.constants.R_OK);
+    } catch (accessError) {
+      return res.status(404).json({
+        success: false,
+        error: `ISO file not found or inaccessible at ${isoAbsolutePath}`
+      });
+    }
+
+    console.log(`Writing ${isoAbsolutePath} to ${usbDevice}`);
 
     let diskNumber = providedDiskNumber;
 
@@ -590,7 +690,7 @@ exit`;
 
         let wslIsoPath;
         try {
-          wslIsoPath = await ensureWslPath(isoPath);
+          wslIsoPath = await ensureWslPath(isoAbsolutePath);
         } catch (pathError) {
           console.error('ISO path conversion error:', pathError);
           broadcastProgress({
@@ -768,6 +868,10 @@ app.get('/api/download-iso', async (req, res) => {
         console.warn('Invalid baseOs/model provided for ISO lookup:', filenameError.message);
       }
     }
+ codex/perform-deep-error-scan-and-report-0n0491
+    prioritizedNames.push('bootai-latest.iso');
+
+ main
     prioritizedNames.push('ai-node.iso');
 
     const directoryEntries = await fsPromises.readdir(isoDirectory);
@@ -979,7 +1083,7 @@ app.get('/', (req, res) => {
 
 // Start server
 server.listen(PORT, () => {
-        console.log(`🚀 BootAI running on http://localhost:${PORT}`);
+  console.log(`🚀 BootAI running on http://localhost:${PORT}`);
   console.log('📱 Opening browser...');
   open(`http://localhost:${PORT}`);
 });
