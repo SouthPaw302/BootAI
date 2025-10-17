@@ -48,3 +48,68 @@ The build script now included in `scripts/build.sh` downloads a supported distro
 3. Replace optimistic progress handling with streamed subprocess output so the UI reflects real-time status precisely.
 4. Introduce a minimal automated test suite (e.g., smoke tests for the REST API) and a linter.
 5. Align README/marketing claims with implemented functionality or complete the missing features.
+
+## Stabilization Plan for Identified Defects
+
+### 1. Root Route Serves Incorrect HTML File
+- **Goal**: Ensure the Express root route returns the SPA entry point from `public/index.html` so the UI loads without a 404.
+- **Approach**: Recompute the file path using the project root instead of `__dirname` and cover both dev and packaged execution contexts.
+- **Implementation Steps**:
+  1. In `src/main.js`, derive the project root via `path.resolve(__dirname, '..')` (or equivalent) when building the `sendFile` path.
+  2. Update the static asset middleware, if necessary, to align with the new root calculation.
+  3. Manually verify that the packaged executable and `npm run dev` both serve the same document.
+- **Validation**:
+  - Start the dev server (`npm run dev`) and confirm `GET /` returns status 200 and renders the SPA.
+  - Run `npm run build` on Windows and confirm `bootai.exe` serves the same file.
+- **Risks / Mitigations**: Minimal—ensure path resolution works for both POSIX and Windows by using `path.join` and avoiding hard-coded separators.
+
+### 2. Windows Build Script Path Resolution Fails
+- **Goal**: Guarantee the `/api/build-iso` endpoint launches the WSL script reliably on Windows by using an absolute WSL-safe path.
+- **Approach**: Convert the Node-side script path to a WSL path before invoking `wsl.exe`.
+- **Implementation Steps**:
+  1. Compute the absolute host path to `scripts/build.sh` with `path.join`.
+  2. Convert that path using `wsl wslpath -a` (or `wslpath` via `child_process.execSync`). Cache the result per process.
+  3. Update the Windows-specific command assembly in `src/main.js` to call `bash "<convertedPath>" …`.
+  4. Maintain the Linux/macOS branch logic as-is.
+- **Validation**:
+  - Unit-test the command builder (inject the path converter) to confirm the generated command matches expectations.
+  - On Windows hardware, run `/api/build-iso` and ensure the script launches without “No such file or directory.”
+- **Risks / Mitigations**: Handle conversion failures by surfacing a descriptive error to the API client and avoid caching stale paths if the working directory moves.
+
+### 3. ISO Download Endpoint Misses Generated Filenames
+- **Goal**: Align `/api/download-iso` filename discovery with the artifacts produced by `scripts/build.sh`.
+- **Approach**: Normalize colon-delimited model identifiers to dash-delimited filenames before searching.
+- **Implementation Steps**:
+  1. Mirror the naming convention used in `scripts/build.sh` when deriving candidate filenames (replace `:` with `-`).
+  2. Optionally, read the most recent `.sha256` file to discover the paired ISO name if direct guessing fails.
+  3. Update logging to indicate which filename was selected.
+- **Validation**:
+  - Build an ISO and ensure `/api/download-iso` returns HTTP 200 with the correct file.
+  - Add regression coverage in a lightweight test (mock filesystem) to ensure new names resolve.
+- **Risks / Mitigations**: Maintain backward compatibility by checking legacy names before falling back to the normalized pattern.
+
+### 4. WSL Status Summary Not Surfaced in UI
+- **Goal**: Display actionable diagnostic messages in the UI when WSL validation fails.
+- **Approach**: Update the frontend to render `summary` (and optionally detailed `checks`) instead of an undefined `error` field.
+- **Implementation Steps**:
+  1. Modify `public/index.html` to use `result.summary` (with a fallback message) when `available === false`.
+  2. Include optional expandable details for each failed check to aid troubleshooting.
+  3. Ensure success flow remains unchanged.
+- **Validation**:
+  - Mock a failed `/api/wsl-status` response in the browser (e.g., via DevTools) and confirm the summary appears.
+  - Confirm that a successful response still advances the wizard.
+- **Risks / Mitigations**: Keep the UI text concise to avoid overwhelming users; consider sanitizing output before insertion.
+
+### 5. Unsafe Windows Disk-to-WSL Device Mapping
+- **Goal**: Prevent accidental data loss by correctly mapping Windows disk numbers to WSL block devices before running `dd`.
+- **Approach**: Introduce an explicit lookup that correlates the selected Windows disk with WSL device metadata (e.g., serial number or size).
+- **Implementation Steps**:
+  1. Extend `/api/write-usb` to query `lsblk --json --output NAME,SERIAL,SIZE,MODEL` (or `/dev/disk/by-id`) inside WSL.
+  2. Match the PowerShell-reported disk attributes (size, model, serial) against the WSL results; require an exact match.
+  3. Abort the operation with a descriptive error if no unique match is found.
+  4. Log and surface the resolved `/dev/disk/by-id/...` path to the UI for user confirmation before flashing.
+  5. Update progress reporting to reflect the additional validation step.
+- **Validation**:
+  - Write integration tests that mock PowerShell/WSL responses to confirm correct path resolution.
+  - On hardware, run the USB writing flow and verify the reported target matches `lsblk` output.
+- **Risks / Mitigations**: Matching by size alone is insufficient—ensure at least two identifiers align. Provide a manual override path only with explicit confirmation.
