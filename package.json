@@ -8,7 +8,7 @@
     "dev": "node src/main.js",
     "build": "pkg src/main.js --targets node18-win-x64 --output bootai.exe",
     "lint": "echo 'Linting not configured yet'",
-    "test": "echo 'Tests not configured yet'"
+    "test": "cross-env BOOTAI_TEST_MODE=1 jest --runInBand"
   },
   "keywords": [
     "ai",
@@ -38,7 +38,10 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "pkg": "^5.8.1"
+    "cross-env": "^10.1.0",
+    "jest": "^30.2.0",
+    "pkg": "^5.8.1",
+    "supertest": "^7.1.4"
   },
   "pkg": {
     "assets": [
@@ -48,5 +51,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node"
   }
 }

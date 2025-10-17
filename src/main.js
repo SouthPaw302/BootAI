@@ -239,6 +239,29 @@ const hasCommand = (command) => {
   }
 };
 
+const runCommandWithTimeout = async (file, args, { timeout = 15000 } = {}) => {
+  try {
+    const { stdout } = await execFileAsync(file, args, {
+      timeout,
+      windowsHide: true
+    });
+
+    return {
+      success: true,
+      output: stdout.trim()
+    };
+  } catch (error) {
+    const timeoutMessage = error.killed ? `Command timed out after ${timeout}ms` : '';
+    const stderr = typeof error.stderr === 'string' ? error.stderr.trim() : '';
+    const message = timeoutMessage || stderr || error.message;
+    return {
+      success: false,
+      output: typeof error.stdout === 'string' ? error.stdout.trim() : '',
+      error: message
+    };
+  }
+};
+
 // WebSocket connection handling
 wss.on('connection', (ws) => {
   console.log('🔌 Client connected to WebSocket');
@@ -264,6 +287,18 @@ app.use(express.static(publicDir));
 
 // USB Detection via PowerShell with timeout
 const scanUSBDrives = async () => {
+  if (isTestMode) {
+    return [
+      {
+        deviceName: 'E:',
+        volumeName: 'TestUSB',
+        size: '32 GB',
+        freeSpace: '16 GB',
+        diskNumber: 1
+      }
+    ];
+  }
+
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       console.error('USB scan timeout after 10 seconds');
@@ -357,7 +392,7 @@ app.post('/api/build-iso', async (req, res) => {
   
   const validOs = ['ubuntu-22.04', 'ubuntu-24.04', 'debian-12'];
   const validModels = ['phi3:mini', 'phi3', 'llama3', 'llama2', 'mistral'];
-  
+
   if (!validOs.includes(baseOs)) {
     return res.status(400).json({
       success: false,
@@ -371,7 +406,23 @@ app.post('/api/build-iso', async (req, res) => {
       error: `Invalid model. Must be one of: ${validModels.join(', ')}`
     });
   }
-  
+
+  if (isTestMode) {
+    setTimeout(() => {
+      broadcastProgress({
+        type: 'progress',
+        stage: 'completed',
+        message: '✅ Test mode build completed',
+        progress: 100
+      });
+    }, 10);
+
+    return res.json({
+      success: true,
+      message: 'Test mode build simulated'
+    });
+  }
+
   try {
     let buildCommand;
     let environmentDescription;
@@ -522,8 +573,7 @@ main
       clearTimeout(buildTimeout); // Clear the timeout
 
       if (code === 0) {
-        broadcastProgress({
-          type: 'progress',
+        emitProgress({
           stage: 'completed',
           message: '✅ BootAI ISO created successfully!',
           progress: 100
@@ -534,8 +584,7 @@ main
         });
       } else if (code === 124) {
         // Timeout is acceptable - model test timed out but build can continue
-        broadcastProgress({
-          type: 'progress',
+        emitProgress({
           stage: 'completed',
           message: '✅ BootAI ISO created successfully! (Model test timed out but continuing)',
           progress: 100
@@ -743,17 +792,19 @@ exit`;
           });
         });
 
-        writeProcess.stderr?.on('data', (chunk) => {
-          const output = chunk.toString().trim();
-          if (output) {
-            broadcastProgress({
-              type: 'progress',
-              stage: 'writing_iso',
-              message: output,
-              progress: 95
-            });
-          }
-        });
+        if (writeProcess.stderr) {
+          writeProcess.stderr.on('data', (chunk) => {
+            const output = chunk.toString().trim();
+            if (output) {
+              broadcastProgress({
+                type: 'progress',
+                stage: 'writing_iso',
+                message: output,
+                progress: 95
+              });
+            }
+          });
+        }
       })().catch((pipelineError) => {
         console.error('USB write pipeline error:', pipelineError);
         broadcastProgress({
@@ -788,63 +839,107 @@ exit`;
 
 // Comprehensive WSL validation
 const validateWSL = async () => {
-  const checks = [
-    { name: 'WSL Status', command: 'wsl --status' },
-    { name: 'WSL List', command: 'wsl --list --verbose' },
-    { name: 'WSL Root Access', command: 'wsl -u root bash -c "echo WSL_ROOT_OK"' },
-    { name: 'Curl Available', command: 'wsl -u root bash -c "which curl"' },
-    { name: 'Apt Available', command: 'wsl -u root bash -c "which apt-get"' },
-    { name: 'Sudo Available', command: 'wsl -u root bash -c "which sudo"' }
-  ];
-  
-  const results = [];
-  
-  for (const check of checks) {
-    try {
-      const result = await new Promise((resolve) => {
-        const timeout = setTimeout(() => {
-          resolve({ success: false, error: 'Timeout', output: '' });
-        }, 5000);
-        
-        exec(check.command, (error, stdout, stderr) => {
-          clearTimeout(timeout);
-          resolve({
-            success: !error,
-            output: stdout,
-            error: error ? error.message : null
-          });
-        });
-      });
-      
-      results.push({
-        name: check.name,
-        success: result.success,
-        output: result.output,
-        error: result.error
-      });
-    } catch (err) {
-      results.push({
-        name: check.name,
-        success: false,
-        output: '',
-        error: err.message
-      });
-    }
+  if (isTestMode) {
+    return {
+      available: true,
+      summary: 'WSL checks simulated (test mode)',
+      checks: [
+        {
+          name: 'Test Mode',
+          success: true,
+          output: 'Simulated WSL check',
+          error: null,
+          required: true
+        }
+      ]
+    };
   }
-  
-  return results;
+
+  if (process.platform !== 'win32') {
+    return {
+      available: true,
+      summary: 'Running on a non-Windows host; WSL is not required.',
+      checks: [
+        {
+          name: 'Platform compatibility',
+          success: true,
+          output: 'Non-Windows environment detected',
+          error: null,
+          required: true
+        }
+      ]
+    };
+  }
+
+  if (!hasCommand('wsl')) {
+    return {
+      available: false,
+      summary: 'wsl.exe was not found on this system. Please install Windows Subsystem for Linux and try again.',
+      checks: [
+        {
+          name: 'WSL executable present',
+          success: false,
+          output: '',
+          error: 'wsl.exe not found in PATH',
+          required: true
+        }
+      ]
+    };
+  }
+
+  const checks = [
+    {
+      name: 'WSL status',
+      args: ['--status'],
+      required: true
+    },
+    {
+      name: 'Installed distributions',
+      args: ['--list', '--verbose'],
+      required: true
+    },
+    {
+      name: 'Root shell access',
+      args: ['-u', 'root', 'bash', '-lc', 'echo BOOTAI_ROOT_OK'],
+      required: false
+    },
+    {
+      name: 'curl availability',
+      args: ['-u', 'root', 'bash', '-lc', 'command -v curl'],
+      required: true
+    }
+  ];
+
+  const results = [];
+
+  for (const check of checks) {
+    const outcome = await runCommandWithTimeout('wsl', check.args, { timeout: check.required ? 15000 : 10000 });
+    results.push({
+      name: check.name,
+      success: outcome.success,
+      output: outcome.output,
+      error: outcome.success ? null : outcome.error,
+      required: check.required
+    });
+  }
+
+  const criticalFailures = results.filter((result) => result.required && !result.success);
+  const available = criticalFailures.length === 0;
+  const summary = available
+    ? 'All required WSL checks passed'
+    : `WSL reported ${criticalFailures.length} blocking issue${criticalFailures.length === 1 ? '' : 's'}.`;
+
+  return {
+    available,
+    summary,
+    checks: results
+  };
 };
 
 app.get('/api/wsl-status', async (req, res) => {
   try {
-    const validationResults = await validateWSL();
-    const allPassed = validationResults.every(result => result.success);
-    
-    res.json({
-      available: allPassed,
-      checks: validationResults,
-      summary: allPassed ? 'All WSL checks passed' : 'Some WSL checks failed'
-    });
+    const validation = await validateWSL();
+    res.json(validation);
   } catch (error) {
     res.json({
       available: false,
@@ -1090,3 +1185,13 @@ server.listen(PORT, () => {
 
 // Initial USB scan
 console.log('🔍 USB drive scanning enabled');
+
+module.exports = {
+  app,
+  server,
+  startServer,
+  isTestMode,
+  projectRoot,
+  buildScriptPath,
+  publicDir
+};

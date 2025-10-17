@@ -85,7 +85,20 @@ npm run dev
 
 # Build executable
 npm run build
+
+# Run automated tests
+npm test
 ```
+
+### Testing
+
+BootAI ships with Jest-powered integration tests that exercise the Express API in a simulated environment. The suite runs the server in test mode, so heavy WSL and ISO build commands are stubbed while request/response handling stays intact.
+
+```bash
+npm test
+```
+
+The command sets `BOOTAI_TEST_MODE=1` automatically, ensuring the tests are safe to run on any development machine.
 
 ### Project Structure
 ```
