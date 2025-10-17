@@ -17,9 +17,55 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = 3000;
-const projectRoot = path.join(__dirname, '..');
-const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
-const publicDir = path.join(projectRoot, 'public');
+const isTestMode = process.env.BOOTAI_TEST_MODE === '1';
+
+const defaultProjectRoot = path.join(__dirname, '..');
+const resolveProjectRoot = () => {
+  if (process.env.BOOTAI_PROJECT_ROOT) {
+    return path.resolve(process.env.BOOTAI_PROJECT_ROOT);
+  }
+
+  if (process.pkg) {
+    const execDir = path.dirname(process.execPath);
+    if (fs.existsSync(execDir)) {
+      return execDir;
+    }
+  }
+
+  if (fs.existsSync(defaultProjectRoot)) {
+    return defaultProjectRoot;
+  }
+
+  return process.cwd();
+};
+
+let projectRoot = resolveProjectRoot();
+
+const resolveExistingPath = (...candidates) => {
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return candidates[candidates.length - 1];
+};
+
+const buildScriptPath = resolveExistingPath(
+  path.join(projectRoot, 'scripts', 'build.sh'),
+  path.join(defaultProjectRoot, 'scripts', 'build.sh'),
+  path.join(process.cwd(), 'scripts', 'build.sh')
+);
+
+const projectRootFromScript = path.resolve(path.dirname(buildScriptPath), '..');
+if (fs.existsSync(projectRootFromScript)) {
+  projectRoot = projectRootFromScript;
+}
+
+const publicDir = resolveExistingPath(
+  path.join(projectRoot, 'public'),
+  path.join(defaultProjectRoot, 'public'),
+  path.join(process.cwd(), 'public')
+);
 
 const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
 const wslPathCache = new Map();
@@ -246,6 +292,18 @@ app.use(express.static(publicDir));
 
 // USB Detection via PowerShell with timeout
 const scanUSBDrives = async () => {
+  if (isTestMode) {
+    return [
+      {
+        deviceName: 'E:',
+        volumeName: 'TestUSB',
+        size: '32 GB',
+        freeSpace: '16 GB',
+        diskNumber: 1
+      }
+    ];
+  }
+
   return new Promise((resolve) => {
     const timeout = setTimeout(() => {
       console.error('USB scan timeout after 10 seconds');
@@ -339,7 +397,7 @@ app.post('/api/build-iso', async (req, res) => {
   
   const validOs = ['ubuntu-22.04', 'ubuntu-24.04', 'debian-12'];
   const validModels = ['phi3:mini', 'phi3', 'llama3', 'llama2', 'mistral'];
-  
+
   if (!validOs.includes(baseOs)) {
     return res.status(400).json({
       success: false,
@@ -353,7 +411,23 @@ app.post('/api/build-iso', async (req, res) => {
       error: `Invalid model. Must be one of: ${validModels.join(', ')}`
     });
   }
-  
+
+  if (isTestMode) {
+    setTimeout(() => {
+      broadcastProgress({
+        type: 'progress',
+        stage: 'completed',
+        message: '✅ Test mode build completed',
+        progress: 100
+      });
+    }, 10);
+
+    return res.json({
+      success: true,
+      message: 'Test mode build simulated'
+    });
+  }
+
   try {
     let buildCommand;
     let environmentDescription;
@@ -768,6 +842,17 @@ exit`;
 
 // Comprehensive WSL validation
 const validateWSL = async () => {
+  if (isTestMode) {
+    return [
+      {
+        name: 'Test Mode',
+        success: true,
+        output: 'Simulated WSL check',
+        error: null
+      }
+    ];
+  }
+
   const checks = [
     { name: 'WSL Status', command: 'wsl --status' },
     { name: 'WSL List', command: 'wsl --list --verbose' },
@@ -1058,12 +1143,33 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-// Start server
-server.listen(PORT, () => {
-  console.log(`🚀 BootAI running on http://localhost:${PORT}`);
-  console.log('📱 Opening browser...');
-  open(`http://localhost:${PORT}`);
-});
+const startServer = (port = PORT) => {
+  const listener = server.listen(port, () => {
+    console.log(`🚀 BootAI running on http://localhost:${port}`);
+    if (!isTestMode) {
+      console.log('📱 Opening browser...');
+      open(`http://localhost:${port}`).catch((error) => {
+        console.warn('Unable to automatically open browser:', error.message);
+      });
+    }
+  });
+
+  return listener;
+};
+
+if (require.main === module && !isTestMode) {
+  startServer();
+}
 
 // Initial USB scan
 console.log('🔍 USB drive scanning enabled');
+
+module.exports = {
+  app,
+  server,
+  startServer,
+  isTestMode,
+  projectRoot,
+  buildScriptPath,
+  publicDir
+};
