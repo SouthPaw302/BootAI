@@ -17,59 +17,16 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const PORT = 3000;
-const isTestMode = process.env.BOOTAI_TEST_MODE === '1';
-
-const defaultProjectRoot = path.join(__dirname, '..');
-const resolveProjectRoot = () => {
-  if (process.env.BOOTAI_PROJECT_ROOT) {
-    return path.resolve(process.env.BOOTAI_PROJECT_ROOT);
-  }
-
-  if (process.pkg) {
-    const execDir = path.dirname(process.execPath);
-    if (fs.existsSync(execDir)) {
-      return execDir;
-    }
-  }
-
-  if (fs.existsSync(defaultProjectRoot)) {
-    return defaultProjectRoot;
-  }
-
-  return process.cwd();
-};
-
-let projectRoot = resolveProjectRoot();
-
-const resolveExistingPath = (...candidates) => {
-  for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return candidates[candidates.length - 1];
-};
-
-const buildScriptPath = resolveExistingPath(
-  path.join(projectRoot, 'scripts', 'build.sh'),
-  path.join(defaultProjectRoot, 'scripts', 'build.sh'),
-  path.join(process.cwd(), 'scripts', 'build.sh')
-);
-
-const projectRootFromScript = path.resolve(path.dirname(buildScriptPath), '..');
-if (fs.existsSync(projectRootFromScript)) {
-  projectRoot = projectRootFromScript;
-}
-
-const publicDir = resolveExistingPath(
-  path.join(projectRoot, 'public'),
-  path.join(defaultProjectRoot, 'public'),
-  path.join(process.cwd(), 'public')
-);
+const projectRoot = path.join(__dirname, '..');
+const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
+const publicDir = path.join(projectRoot, 'public');
 
 const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+ codex/perform-deep-error-scan-and-report-0n0491
 const wslPathCache = new Map();
 
+
+main
 const ensureWslPath = async (originalPath) => {
   if (!originalPath) {
     throw new Error('Path cannot be empty');
@@ -83,6 +40,7 @@ const ensureWslPath = async (originalPath) => {
     return originalPath;
   }
 
+codex/perform-deep-error-scan-and-report-0n0491
   const cacheKey = originalPath;
   if (wslPathCache.has(cacheKey)) {
     return wslPathCache.get(cacheKey);
@@ -109,6 +67,16 @@ const ensureWslPath = async (originalPath) => {
 
   wslPathCache.set(cacheKey, normalized);
   return normalized;
+
+  try {
+    const { stdout } = await execAsync(`wsl wslpath '${escapeForSingleQuotes(originalPath)}'`);
+    const converted = stdout.trim();
+    return converted || originalPath;
+  } catch (conversionError) {
+    console.warn('Failed to convert path to WSL format:', conversionError.message);
+    return originalPath;
+  }
+ main
 };
 
 const sanitizeModelIdentifier = (model) => String(model).replace(/[:\s]+/g, '-');
@@ -119,7 +87,11 @@ const buildIsoFilename = (baseOs, model) => {
 
   return `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model).toLowerCase()}.iso`;
 };
+ codex/perform-deep-error-scan-and-report-0n0491
 const isBootaiIsoName = (filename) => filename === 'bootai-latest.iso' || filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+
+const isBootaiIsoName = (filename) => filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+main
 
 const SIZE_TOLERANCE_BYTES = 10 * 1024 * 1024; // 10 MiB tolerance for size comparisons
 
@@ -463,12 +435,20 @@ app.post('/api/build-iso', async (req, res) => {
         });
       }
 
+ codex/perform-deep-error-scan-and-report-0n0491
       const wslProjectRoot = await ensureWslPath(projectRoot);
       const escapedProjectRoot = escapeForSingleQuotes(wslProjectRoot);
       const escapedBaseOs = escapeForSingleQuotes(baseOs);
       const escapedModel = escapeForSingleQuotes(model);
       const wslCommand = `cd '${escapedProjectRoot}' && bash './scripts/build.sh' '${escapedBaseOs}' '${escapedModel}'`;
       buildCommand = `wsl -u root bash -c "${wslCommand}"`;
+
+      const wslBuildScriptPath = await ensureWslPath(buildScriptPath);
+      const escapedScript = escapeForSingleQuotes(wslBuildScriptPath);
+      const escapedBaseOs = escapeForSingleQuotes(baseOs);
+      const escapedModel = escapeForSingleQuotes(model);
+      buildCommand = `wsl -u root bash -c "bash '${escapedScript}' '${escapedBaseOs}' '${escapedModel}'"`;
+main
       environmentDescription = 'WSL';
     } else {
       buildCommand = `bash "${buildScriptPath}" "${baseOs}" "${model}"`;
@@ -478,21 +458,6 @@ app.post('/api/build-iso', async (req, res) => {
     console.log(`Building ISO for ${baseOs} with ${model} using ${environmentDescription}`);
 
     let lastErrorOutput = '';
-    let lastProgress = 0;
-
-    const emitProgress = ({ stage, message, progress }) => {
-      if (typeof progress === 'number') {
-        lastProgress = Math.max(lastProgress, progress);
-      }
-
-      const resolvedProgress = typeof progress === 'number' ? progress : lastProgress || 0;
-      broadcastProgress({
-        type: 'progress',
-        stage,
-        message,
-        progress: resolvedProgress
-      });
-    };
 
     // Execute the existing build script with real-time progress and timeout
     const buildProcess = spawn(buildCommand, {
@@ -528,73 +493,68 @@ app.post('/api/build-iso', async (req, res) => {
       }
     }, 30 * 60 * 1000);
     
-    if (buildProcess.stdout) {
-      buildProcess.stdout.on('data', (data) => {
-        const output = data.toString();
-        console.log('WSL output:', output);
-        const trimmed = output.trim();
-
-        if (output.includes('Downloading')) {
-          emitProgress({
-            stage: 'downloading',
-            message: trimmed || 'Downloading assets',
-            progress: 20
-          });
-        } else if (output.includes('Installing Ollama')) {
-          emitProgress({
-            stage: 'installing',
-            message: trimmed,
-            progress: 40
-          });
-        } else if (output.includes('Testing model compatibility')) {
-          emitProgress({
-            stage: 'testing_model',
-            message: trimmed,
-            progress: 50
-          });
-        } else if (output.includes('Model') && output.includes('working correctly')) {
-          emitProgress({
-            stage: 'model_tested',
-            message: trimmed,
-            progress: 60
-          });
-        } else if (output.includes('timed out, but continuing')) {
-          emitProgress({
-            stage: 'model_timeout',
-            message: trimmed,
-            progress: 60
-          });
-        } else if (output.includes('Creating BootAI ISO')) {
-          emitProgress({
-            stage: 'building_iso',
-            message: trimmed,
-            progress: 80
-          });
-        } else if (trimmed) {
-          emitProgress({
-            stage: 'log',
-            message: trimmed,
-            progress: lastProgress || 10
-          });
-        }
+    buildProcess.stdout?.on('data', (data) => {
+      const output = data.toString();
+      console.log('WSL output:', output);
+      
+      // Parse progress from output
+      if (output.includes('Downloading')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'downloading',
+          message: output.trim(),
+          progress: 20
+        });
+      } else if (output.includes('Installing Ollama')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'installing',
+          message: output.trim(),
+          progress: 40
+        });
+      } else if (output.includes('Testing model compatibility')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'testing_model',
+          message: output.trim(),
+          progress: 50
+        });
+      } else if (output.includes('Model') && output.includes('working correctly')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'model_tested',
+          message: output.trim(),
+          progress: 60
+        });
+      } else if (output.includes('timed out, but continuing')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'model_timeout',
+          message: output.trim(),
+          progress: 60
+        });
+      } else if (output.includes('Creating BootAI ISO')) {
+        broadcastProgress({
+          type: 'progress',
+          stage: 'building_iso',
+          message: output.trim(),
+          progress: 80
+        });
+      }
+    });
+    
+    buildProcess.stderr?.on('data', (data) => {
+      const message = data.toString();
+      console.error('WSL error:', message);
+      const trimmed = message.trim();
+      if (trimmed) {
+        lastErrorOutput = trimmed;
+      }
+      broadcastProgress({
+        type: 'error',
+        message: trimmed || message
       });
-    }
-
-    if (buildProcess.stderr) {
-      buildProcess.stderr.on('data', (data) => {
-        const message = data.toString();
-        console.error('WSL error:', message);
-        const trimmed = message.trim();
-        if (trimmed) {
-          lastErrorOutput = trimmed;
-          emitProgress({
-            stage: 'log',
-            message: trimmed,
-            progress: lastProgress || 10
-          });
-        }
-      });
-    }
+    });
     
     buildProcess.on('error', (spawnError) => {
       clearTimeout(buildTimeout);
@@ -1003,7 +963,10 @@ app.get('/api/download-iso', async (req, res) => {
         console.warn('Invalid baseOs/model provided for ISO lookup:', filenameError.message);
       }
     }
+ codex/perform-deep-error-scan-and-report-0n0491
     prioritizedNames.push('bootai-latest.iso');
+
+ main
     prioritizedNames.push('ai-node.iso');
 
     const directoryEntries = await fsPromises.readdir(isoDirectory);
@@ -1213,23 +1176,12 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-const startServer = (port = PORT) => {
-  const listener = server.listen(port, () => {
-    console.log(`🚀 BootAI running on http://localhost:${port}`);
-    if (!isTestMode) {
-      console.log('📱 Opening browser...');
-      open(`http://localhost:${port}`).catch((error) => {
-        console.warn('Unable to automatically open browser:', error.message);
-      });
-    }
-  });
-
-  return listener;
-};
-
-if (require.main === module && !isTestMode) {
-  startServer();
-}
+// Start server
+server.listen(PORT, () => {
+  console.log(`🚀 BootAI running on http://localhost:${PORT}`);
+  console.log('📱 Opening browser...');
+  open(`http://localhost:${PORT}`);
+});
 
 // Initial USB scan
 console.log('🔍 USB drive scanning enabled');

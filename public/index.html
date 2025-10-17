@@ -505,6 +505,14 @@
                 lastBuildRequest = { baseOs, model };
                 isoPath = buildIsoFilename(baseOs, model);
 
+ codex/perform-deep-error-scan-and-report-0n0491
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                
+ main
                 const result = await response.json();
 
                 if (!response.ok || !result.success) {
