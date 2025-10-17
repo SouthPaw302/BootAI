@@ -22,8 +22,11 @@ const buildScriptPath = path.join(projectRoot, 'scripts', 'build.sh');
 const publicDir = path.join(projectRoot, 'public');
 
 const escapeForSingleQuotes = (value) => String(value).replace(/'/g, `'"'"'`);
+ codex/perform-deep-error-scan-and-report-0n0491
 const wslPathCache = new Map();
 
+
+main
 const ensureWslPath = async (originalPath) => {
   if (!originalPath) {
     throw new Error('Path cannot be empty');
@@ -37,6 +40,7 @@ const ensureWslPath = async (originalPath) => {
     return originalPath;
   }
 
+codex/perform-deep-error-scan-and-report-0n0491
   const cacheKey = originalPath;
   if (wslPathCache.has(cacheKey)) {
     return wslPathCache.get(cacheKey);
@@ -63,6 +67,16 @@ const ensureWslPath = async (originalPath) => {
 
   wslPathCache.set(cacheKey, normalized);
   return normalized;
+
+  try {
+    const { stdout } = await execAsync(`wsl wslpath '${escapeForSingleQuotes(originalPath)}'`);
+    const converted = stdout.trim();
+    return converted || originalPath;
+  } catch (conversionError) {
+    console.warn('Failed to convert path to WSL format:', conversionError.message);
+    return originalPath;
+  }
+ main
 };
 
 const sanitizeModelIdentifier = (model) => String(model).replace(/[:\s]+/g, '-');
@@ -73,7 +87,11 @@ const buildIsoFilename = (baseOs, model) => {
 
   return `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model).toLowerCase()}.iso`;
 };
+ codex/perform-deep-error-scan-and-report-0n0491
 const isBootaiIsoName = (filename) => filename === 'bootai-latest.iso' || filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+
+const isBootaiIsoName = (filename) => filename === 'ai-node.iso' || /^bootai-[a-z0-9.-]+\.iso$/i.test(filename);
+main
 
 const SIZE_TOLERANCE_BYTES = 10 * 1024 * 1024; // 10 MiB tolerance for size comparisons
 
@@ -366,12 +384,20 @@ app.post('/api/build-iso', async (req, res) => {
         });
       }
 
+ codex/perform-deep-error-scan-and-report-0n0491
       const wslProjectRoot = await ensureWslPath(projectRoot);
       const escapedProjectRoot = escapeForSingleQuotes(wslProjectRoot);
       const escapedBaseOs = escapeForSingleQuotes(baseOs);
       const escapedModel = escapeForSingleQuotes(model);
       const wslCommand = `cd '${escapedProjectRoot}' && bash './scripts/build.sh' '${escapedBaseOs}' '${escapedModel}'`;
       buildCommand = `wsl -u root bash -c "${wslCommand}"`;
+
+      const wslBuildScriptPath = await ensureWslPath(buildScriptPath);
+      const escapedScript = escapeForSingleQuotes(wslBuildScriptPath);
+      const escapedBaseOs = escapeForSingleQuotes(baseOs);
+      const escapedModel = escapeForSingleQuotes(model);
+      buildCommand = `wsl -u root bash -c "bash '${escapedScript}' '${escapedBaseOs}' '${escapedModel}'"`;
+main
       environmentDescription = 'WSL';
     } else {
       buildCommand = `bash "${buildScriptPath}" "${baseOs}" "${model}"`;
@@ -842,7 +868,10 @@ app.get('/api/download-iso', async (req, res) => {
         console.warn('Invalid baseOs/model provided for ISO lookup:', filenameError.message);
       }
     }
+ codex/perform-deep-error-scan-and-report-0n0491
     prioritizedNames.push('bootai-latest.iso');
+
+ main
     prioritizedNames.push('ai-node.iso');
 
     const directoryEntries = await fsPromises.readdir(isoDirectory);
