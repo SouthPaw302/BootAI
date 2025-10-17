@@ -89,13 +89,13 @@ npm run build
 
 ### Project Structure
 ```
-ai-node-builder/
+bootai/
 ├── src/
 │   └── main.js              # Express server + WebSocket
 ├── public/
 │   └── index.html           # Web interface
 ├── scripts/
-│   └── ainode-build.sh     # Linux build script
+│   └── build.sh            # Linux build script
 ├── .cursor/
 │   └── commands/           # Spec Kit commands
 ├── .specify/

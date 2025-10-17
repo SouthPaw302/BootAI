@@ -40,7 +40,7 @@ External commands (PowerShell, diskpart, wsl, ollama, scripts/build.sh)
 - Downloads the requested distro ISO with resume support and caches it for future builds.
 - Attempts to pull the requested Ollama model when the `ollama` CLI is available; continues gracefully if not.
 - Emits progress-friendly log lines that the backend relays to the UI.
-- Copies the base ISO to `bootai-<base>-<model>.iso`, produces `ai-node.iso` for legacy tooling, and writes a SHA-256 checksum file.
+- Copies the base ISO to `bootai-<base>-<model>.iso`, publishes `bootai-latest.iso` (and an `ai-node.iso` compatibility link), and writes a SHA-256 checksum file.
 
 ### External Dependencies
 - Node.js 18+ runtime (server + packaging).
