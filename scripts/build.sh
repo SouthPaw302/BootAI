@@ -12,6 +12,7 @@ BASE_OS="${1:-ubuntu-22.04}"
 MODEL_NAME="${2:-phi3:mini}"
 
 SUPPORTED_OSES=("ubuntu-22.04" "ubuntu-24.04" "debian-12")
+ISO_URLS=()
 SUPPORTED_MODELS=("phi3:mini" "phi3" "llama3" "llama2" "mistral")
 
 if [[ ! " ${SUPPORTED_OSES[*]} " =~ " ${BASE_OS} " ]]; then
@@ -43,18 +44,27 @@ trap cleanup EXIT
 
 case "${BASE_OS}" in
   ubuntu-22.04)
-    ISO_URL="https://releases.ubuntu.com/22.04/ubuntu-22.04.5-live-server-amd64.iso"
     ISO_NAME="ubuntu-22.04.5-live-server-amd64.iso"
+    ISO_URLS=(
+      "https://releases.ubuntu.com/22.04/${ISO_NAME}"
+      "https://old-releases.ubuntu.com/releases/22.04.5/${ISO_NAME}"
+    )
     MIN_SIZE=1000000000
     ;;
   ubuntu-24.04)
-    ISO_URL="https://releases.ubuntu.com/24.04/ubuntu-24.04.1-live-server-amd64.iso"
-    ISO_NAME="ubuntu-24.04.1-live-server-amd64.iso"
+    ISO_NAME="ubuntu-24.04.3-live-server-amd64.iso"
+    ISO_URLS=(
+      "https://releases.ubuntu.com/24.04/${ISO_NAME}"
+      "https://old-releases.ubuntu.com/releases/24.04.3/${ISO_NAME}"
+    )
     MIN_SIZE=1000000000
     ;;
   debian-12)
-    ISO_URL="https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-12.7.0-amd64-netinst.iso"
-    ISO_NAME="debian-12.7.0-amd64-netinst.iso"
+    ISO_NAME="debian-12.9.0-amd64-netinst.iso"
+    ISO_URLS=(
+      "https://cdimage.debian.org/mirror/cdimage/archive/12.9.0/amd64/iso-cd/${ISO_NAME}"
+      "https://cdimage.debian.org/cdimage/archive/12.9.0/amd64/iso-cd/${ISO_NAME}"
+    )
     MIN_SIZE=500000000
     ;;
   *)
@@ -77,10 +87,41 @@ if [[ -f "${CACHED_ISO}" ]]; then
   fi
 fi
 
-if [[ ! -f "${BUILD_DIR}/base.iso" ]]; then
-  echo "Downloading ${ISO_URL}" && echo "Downloading distro image"
-  curl --fail --location --continue-at - --output "${BUILD_DIR}/base.iso" "${ISO_URL}"
-  cp "${BUILD_DIR}/base.iso" "${CACHED_ISO}"
+SOURCE_ISO="${BOOTAI_SOURCE_ISO:-}"
+
+if [[ -n "${SOURCE_ISO}" ]]; then
+  if [[ ! -f "${SOURCE_ISO}" ]]; then
+    echo "Specified BOOTAI_SOURCE_ISO '${SOURCE_ISO}' does not exist" >&2
+    exit 1
+  fi
+
+  echo "Using provided ISO at ${SOURCE_ISO}"
+  cp "${SOURCE_ISO}" "${BUILD_DIR}/base.iso"
+else
+  if [[ ! -f "${BUILD_DIR}/base.iso" ]]; then
+    echo "Attempting download from configured mirrors" && echo "Downloading distro image"
+
+    download_success=0
+    for url in "${ISO_URLS[@]}"; do
+      [[ -z "${url}" ]] && continue
+
+      echo "Fetching ${url}"
+      if curl --fail --location --continue-at - --output "${BUILD_DIR}/base.iso" "${url}"; then
+        download_success=1
+        break
+      fi
+
+      echo "Download failed from ${url}; trying next mirror" >&2
+      rm -f "${BUILD_DIR}/base.iso"
+    done
+
+    if [[ ${download_success} -ne 1 ]]; then
+      echo "All download attempts failed for ${BASE_OS}" >&2
+      exit 1
+    fi
+
+    cp "${BUILD_DIR}/base.iso" "${CACHED_ISO}"
+  fi
 fi
 
 echo "Installing Ollama dependencies (if available)"

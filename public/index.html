@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BootAI</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' ry='3' fill='%23667eea'/%3E%3Ctext x='50%25' y='55%25' dominant-baseline='middle' text-anchor='middle' font-family='Segoe UI' font-size='9' fill='white'%3EAI%3C/text%3E%3C/svg%3E">
     <style>
         * {
             margin: 0;
@@ -385,7 +386,11 @@
     <script>
         let selectedUSBDrive = null;
         let isoPath = null;
+        let lastBuildRequest = null;
         let ws = null;
+
+        const sanitizeModelIdentifier = (model) => String(model).replace(/[:\s]+/g, '-').toLowerCase();
+        const buildIsoFilename = (baseOs, model) => `bootai-${String(baseOs).toLowerCase()}-${sanitizeModelIdentifier(model)}.iso`;
 
         // WebSocket connection for real-time updates
         function connectWebSocket() {
@@ -433,7 +438,9 @@
                 document.getElementById('step2').classList.add('completed');
                 document.getElementById('step3').classList.add('active');
                 document.getElementById('downloadOption').classList.remove('hidden');
-                isoPath = 'ai-node.iso';
+                if (!isoPath && lastBuildRequest) {
+                    isoPath = buildIsoFilename(lastBuildRequest.baseOs, lastBuildRequest.model);
+                }
             }
         }
 
@@ -445,16 +452,23 @@
         async function checkWSL() {
             const statusDiv = document.getElementById('wslStatus');
             statusDiv.innerHTML = '<div class="status info">Checking WSL status...</div>';
-            
+
             try {
                 const response = await fetch('/api/wsl-status');
                 const result = await response.json();
-                
+
+                const summaryText = result.summary || (result.available ? 'WSL is available and ready!' : 'WSL is not available');
+
                 if (result.available) {
-                    statusDiv.innerHTML = '<div class="status success">✅ WSL is available and ready!</div>';
+                    statusDiv.innerHTML = `<div class="status success">✅ ${summaryText}</div>`;
                     document.getElementById('step2').classList.add('active');
                 } else {
-                    statusDiv.innerHTML = `<div class="status error">❌ WSL is not available: ${result.error}</div>`;
+                    const checks = Array.isArray(result.checks) ? result.checks : [];
+                    const failingChecks = checks.filter(check => !check.success);
+                    const detailList = failingChecks.length
+                        ? `<ul>${failingChecks.map(check => `<li>${check.name}: ${check.error || check.output || 'failed'}</li>`).join('')}</ul>`
+                        : '';
+                    statusDiv.innerHTML = `<div class="status error">❌ ${summaryText}${detailList}</div>`;
                 }
             } catch (error) {
                 statusDiv.innerHTML = `<div class="status error">❌ Error checking WSL: ${error.message}</div>`;
@@ -487,25 +501,27 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ baseOs, model })
                 });
-                
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || `HTTP ${response.status}`);
-                }
-                
+
+                lastBuildRequest = { baseOs, model };
+                isoPath = buildIsoFilename(baseOs, model);
+
                 const result = await response.json();
-                
-                if (!result.success) {
-                    throw new Error(result.error);
+
+                if (!response.ok || !result.success) {
+                    const baseMessage = result.error || `HTTP ${response.status}`;
+                    const details = result.details ? ` (${result.details})` : '';
+                    throw new Error(`${baseMessage}${details}`);
                 }
-                
+
                 // Progress updates will come via WebSocket
-                
+
             } catch (error) {
                 console.error('Build error:', error);
                 statusDiv.innerHTML = `<div class="status error">❌ Build failed: ${error.message}</div>`;
                 buildBtn.disabled = false;
                 buildBtn.textContent = 'Start Building ISO';
+                isoPath = null;
+                lastBuildRequest = null;
             }
         }
 
@@ -643,11 +659,12 @@
 
         async function downloadISO(customFilename = null) {
             const statusDiv = document.getElementById('downloadStatus');
-            
+
             statusDiv.innerHTML = '<div class="status info">Preparing ISO download...</div>';
-            
+
             try {
-                const response = await fetch('/api/download-iso');
+                const query = lastBuildRequest ? `?${new URLSearchParams(lastBuildRequest).toString()}` : '';
+                const response = await fetch(`/api/download-iso${query}`);
                 
                 if (!response.ok) {
                     const errorData = await response.json();
