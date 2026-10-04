@@ -78,7 +78,7 @@ jobs:
           mkdir -p /tmp/dg-proof
           MODEL="$GITHUB_WORKSPACE/models/diffusiongemma-q4/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
           set +e
-          timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -lm mmap             -lzm on             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
+          timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -lm mmap             -lzm on             --temp 0             --diffusion-eb-max-steps 16             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
           RC=$?
           set -e
           printf '%s\n' "$RC" > /tmp/dg-proof/exit_code.txt
@@ -100,6 +100,7 @@ jobs:
             'generated_expected_answer': bool(re.search(r'(?<!\d)8(?!\d)',out)),
             'diffusion_engine_evidence': 'diffusion' in err.lower() and any(x in err.lower() for x in ('denois','entropy','canvas','step')),
             'model_load_evidence': 'diffusion' in err.lower() and ('gemma' in err.lower() or 'model' in err.lower()),
+            'sixteen_step_budget_evidence': 'max_steps=16' in err.lower(),
           }
           report={
             'schema':'argus.diffusiongemma-q4-public-proof.v2',
@@ -113,6 +114,8 @@ jobs:
             'model_file':'diffusiongemma-26B-A4B-it-Q4_K_M.gguf',
             'model_sha256':'24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5',
             'prompt':'What is 3+5? Answer with the number only.',
+            'temperature':0,
+            'max_denoising_steps':16,
             'checks':checks,
             'stdout_tail':out[-8000:],
             'stderr_tail':err[-12000:],
