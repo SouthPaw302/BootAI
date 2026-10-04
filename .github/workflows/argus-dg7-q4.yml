@@ -61,8 +61,8 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          mkdir -p /tmp/dg-model
-          MODEL=/tmp/dg-model/diffusiongemma-26B-A4B-it-Q4_K_M.gguf
+          mkdir -p "$GITHUB_WORKSPACE/models/diffusiongemma-q4"
+          MODEL="$GITHUB_WORKSPACE/models/diffusiongemma-q4/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
           curl -fL --retry 5 --retry-delay 5 --continue-at -             "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/main/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"             -o "$MODEL"
           echo "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5  $MODEL" | sha256sum -c -
           ls -lh "$MODEL"
@@ -76,7 +76,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p /tmp/dg-proof
-          MODEL=/tmp/dg-model/diffusiongemma-26B-A4B-it-Q4_K_M.gguf
+          MODEL="$GITHUB_WORKSPACE/models/diffusiongemma-q4/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
           set +e
           timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -lm mmap             -lzm on             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
           RC=$?
