@@ -66,17 +66,19 @@ jobs:
           curl -fL --retry 5 --retry-delay 5 --continue-at -             "https://huggingface.co/unsloth/diffusiongemma-26B-A4B-it-GGUF/resolve/main/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"             -o "$MODEL"
           echo "24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5  $MODEL" | sha256sum -c -
           ls -lh "$MODEL"
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' || true
           df -h
           free -h
 
-      - name: Run real block-diffusion inference
+      - name: Run real block-diffusion inference with lazy mmap
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p /tmp/dg-proof
           MODEL=/tmp/dg-model/diffusiongemma-26B-A4B-it-Q4_K_M.gguf
           set +e
-          timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -dio             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
+          timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -lm mmap             -lzm on             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
           RC=$?
           set -e
           printf '%s\n' "$RC" > /tmp/dg-proof/exit_code.txt
@@ -95,16 +97,18 @@ jobs:
           ansi=re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
           out=ansi.sub('',out); err=ansi.sub('',err)
           checks={
-            'generated_expected_answer': bool(re.search(r'(?<!\\d)8(?!\\d)',out)),
+            'generated_expected_answer': bool(re.search(r'(?<!\d)8(?!\d)',out)),
             'diffusion_engine_evidence': 'diffusion' in err.lower() and any(x in err.lower() for x in ('denois','entropy','canvas','step')),
             'model_load_evidence': 'diffusion' in err.lower() and ('gemma' in err.lower() or 'model' in err.lower()),
           }
           report={
-            'schema':'argus.diffusiongemma-q4-public-proof.v1',
+            'schema':'argus.diffusiongemma-q4-public-proof.v2',
             'source_repo':'SouthPaw302/BootAI',
             'source_sha':os.environ['GITHUB_SHA'],
             'runtime_repo':'danielhanchen/llama.cpp',
             'runtime_commit':'3dac51dc80b1400929266453c6ced6748ccf6862',
+            'load_mode':'mmap',
+            'lazy_mode':'on',
             'model_repo':'unsloth/diffusiongemma-26B-A4B-it-GGUF',
             'model_file':'diffusiongemma-26B-A4B-it-Q4_K_M.gguf',
             'model_sha256':'24523b6c833c9ce9f5f34f9b333ab1517d73d6f1e76a103645353114c8028bc5',
