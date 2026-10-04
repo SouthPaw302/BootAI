@@ -1,0 +1,128 @@
+name: ARGUS DG7 Public Q2 Runtime
+
+on:
+  push:
+    branches: [argus-dg7-proof]
+    paths:
+      - '.github/workflows/argus-dg7-q2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diffusiongemma-q2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Expand disk and add swap
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 4096
+          temp-reserve-mb: 1024
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - uses: actions/checkout@v4
+
+      - name: Record public runner
+        run: |
+          set -euxo pipefail
+          df -h
+          free -h
+          swapon --show
+          nproc
+
+      - name: Install build tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y cmake ninja-build build-essential curl ca-certificates
+
+      - name: Build pinned block-diffusion engine
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none https://github.com/danielhanchen/llama.cpp.git /tmp/llama-dg
+          git -C /tmp/llama-dg checkout 3dac51dc80b1400929266453c6ced6748ccf6862
+          test "$(git -C /tmp/llama-dg rev-parse HEAD)" = "3dac51dc80b1400929266453c6ced6748ccf6862"
+          cmake -S /tmp/llama-dg -B /tmp/llama-dg/build             -DGGML_CUDA=OFF             -DLLAMA_CURL=OFF             -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/llama-dg/build -j3 --target llama-diffusion-cli
+
+      - name: Download and verify exact Q2 checkpoint
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/dg-model /tmp/dg-proof
+          MODEL=/tmp/dg-model/google.diffusiongemma-26B-A4B-it.Q2_K.gguf
+          curl -fL --retry 5 --retry-delay 5 --continue-at -             "https://huggingface.co/DevQuasar/google.diffusiongemma-26B-A4B-it-GGUF/resolve/main/google.diffusiongemma-26B-A4B-it.Q2_K.gguf"             -o "$MODEL"
+          test "$(stat -c%s "$MODEL")" = "10590000896"
+          echo "a22d8c5069621642a3f5d824613aa9cb6736c9bc5ed42ccbb428dcc055feb54a  $MODEL" | sha256sum -c -
+          sync
+          sudo sh -c 'echo 3 > /proc/sys/vm/drop_caches' || true
+          ls -lh "$MODEL"
+          free -h
+
+      - name: Execute real Q2 DiffusionGemma
+        run: |
+          set -euxo pipefail
+          MODEL=/tmp/dg-model/google.diffusiongemma-26B-A4B-it.Q2_K.gguf
+          set +e
+          timeout 7200 /tmp/llama-dg/build/bin/llama-diffusion-cli             -m "$MODEL"             -ngl 0             -t 4             -tb 4             -lm mmap             -lzm on             -p "What is 3+5? Answer with the number only."             -n 256             > /tmp/dg-proof/stdout.txt             2> /tmp/dg-proof/stderr.txt
+          RC=$?
+          set -e
+          echo "$RC" > /tmp/dg-proof/exit_code.txt
+          tail -200 /tmp/dg-proof/stdout.txt || true
+          tail -300 /tmp/dg-proof/stderr.txt || true
+          test "$RC" = "0"
+
+      - name: Verify actual block-diffusion output
+        run: |
+          python - <<'PY'
+          import json,re,os,pathlib
+          out=pathlib.Path('/tmp/dg-proof/stdout.txt').read_text(errors='replace')
+          err=pathlib.Path('/tmp/dg-proof/stderr.txt').read_text(errors='replace')
+          ansi=re.compile(r'\x1b\[[0-9;?]*[A-Za-z]')
+          out=ansi.sub('',out); err=ansi.sub('',err)
+          checks={
+            'generated_expected_answer': bool(re.search(r'(?<!\d)8(?!\d)',out)),
+            'diffusion_engine_evidence': 'diffusion' in err.lower() and any(k in err.lower() for k in ('entropy','denois','canvas','step')),
+            'model_load_evidence': 'diffusion' in err.lower() and ('gemma' in err.lower() or 'model' in err.lower()),
+          }
+          report={
+            'schema':'argus.diffusiongemma-q2-public-proof.v1',
+            'source_repo':'SouthPaw302/BootAI',
+            'source_sha':os.environ['GITHUB_SHA'],
+            'base_model':'google/diffusiongemma-26B-A4B-it',
+            'quant_repo':'DevQuasar/google.diffusiongemma-26B-A4B-it-GGUF',
+            'quant':'Q2_K',
+            'model_bytes':10590000896,
+            'model_sha256':'a22d8c5069621642a3f5d824613aa9cb6736c9bc5ed42ccbb428dcc055feb54a',
+            'runtime':'llama-diffusion-cli',
+            'runtime_commit':'3dac51dc80b1400929266453c6ced6748ccf6862',
+            'prompt':'What is 3+5? Answer with the number only.',
+            'checks':checks,
+            'stdout_tail':out[-8000:],
+            'stderr_tail':err[-12000:],
+            'pass':all(checks.values()),
+          }
+          pathlib.Path('/tmp/dg-proof/proof.json').write_text(json.dumps(report,indent=2)+'\n')
+          print(json.dumps(report,indent=2))
+          raise SystemExit(0 if report['pass'] else 1)
+          PY
+
+      - name: Snapshot resources
+        if: always()
+        run: |
+          df -h || true
+          free -h || true
+          swapon --show || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: argus-dg7-public-q2-${{ github.sha }}
+          path: /tmp/dg-proof/
+          retention-days: 7
